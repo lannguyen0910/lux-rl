@@ -1,8 +1,70 @@
+from typing import DefaultDict, Dict, List, Tuple, Set
+from collections import defaultdict, deque
 from .constants import Constants
 from .game_map import GameMap
 from .game_objects import Player, Unit, City, CityTile
-
+from .game_position import Position
 INPUT_CONSTANTS = Constants.INPUT_CONSTANTS
+
+
+class Mission:
+    """
+    Each mission is defined with a target position and optionally an action (e.g. build citytile)
+    """
+
+    def __init__(self, unit_id: str, target_position: Position, target_action: str = ""):
+        self.target_position: Position = target_position
+        self.target_action: str = target_action
+        self.unit_id: str = unit_id
+        self.delays: int = 0
+
+    def __str__(self):
+        return " ".join([str(self.target_position), self.target_action])
+
+
+class Missions(defaultdict):
+    """
+    Plan missions for each unit in arbitrary order.
+    """
+
+    def __init__(self):
+        self: DefaultDict[str, Mission] = defaultdict(Mission)
+
+    def add(self, mission: Mission):
+        self[mission.unit_id] = mission
+
+    def cleanup(self, player: Player, player_city_tile_xy_set: Set[Tuple], opponent_city_tile_xy_set: Set[Tuple]):
+        for unit_id in list(self.keys()):
+            mission: Mission = self[unit_id]
+
+            # if dead, delete from list
+            if unit_id not in player.units_by_id:
+                del self[unit_id]
+                continue
+
+            unit: Unit = player.units_by_id[unit_id]
+
+            # if want to build city without resource, delete from list
+            if mission.target_action and mission.target_action[:5] == "bcity":
+                if unit.cargo == 0:
+                    del self[unit_id]
+                    continue
+
+            # if opponent has already built a base, reconsider your mission
+            if tuple(mission.target_position) in opponent_city_tile_xy_set:
+                del self[unit_id]
+                continue
+
+            # if are in a base, reconsider your mission
+            if tuple(unit.pos) in player_city_tile_xy_set:
+                del self[unit_id]
+                continue
+
+    def __str__(self):
+        return " ".join([unit_id + " " + str(x) for unit_id, x in self.items()])
+
+    def get_targets(self):
+        return [mission.target_position for unit_id, mission in self.items()]
 
 
 class Game:
@@ -46,7 +108,7 @@ class Game:
             if input_identifier == INPUT_CONSTANTS.RESEARCH_POINTS:
                 team = int(strs[1])
                 self.players[team].research_points = int(strs[2])
-                
+
             elif input_identifier == INPUT_CONSTANTS.RESOURCES:
                 r_type = strs[1]
                 x = int(strs[2])
@@ -64,14 +126,16 @@ class Game:
                 wood = int(strs[7])
                 coal = int(strs[8])
                 uranium = int(strs[9])
-                self.players[team].units.append(Unit(team, unittype, unitid, x, y, cooldown, wood, coal, uranium))
-            
+                self.players[team].units.append(
+                    Unit(team, unittype, unitid, x, y, cooldown, wood, coal, uranium))
+
             elif input_identifier == INPUT_CONSTANTS.CITY:
                 team = int(strs[1])
                 cityid = strs[2]
                 fuel = float(strs[3])
                 lightupkeep = float(strs[4])
-                self.players[team].cities[cityid] = City(team, cityid, fuel, lightupkeep)
+                self.players[team].cities[cityid] = City(
+                    team, cityid, fuel, lightupkeep)
 
             elif input_identifier == INPUT_CONSTANTS.CITY_TILES:
                 team = int(strs[1])
@@ -82,7 +146,7 @@ class Game:
                 city = self.players[team].cities[cityid]
                 citytile = city._add_city_tile(x, y, cooldown)
                 self.map.get_cell(x, y).citytile = citytile
-                self.players[team].city_tile_count += 1;
+                self.players[team].city_tile_count += 1
 
             elif input_identifier == INPUT_CONSTANTS.ROADS:
                 x = int(strs[1])
