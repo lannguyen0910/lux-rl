@@ -1,0 +1,14 @@
+settings:
+  seed: 2021
+  BUFFER_SIZE: 20000
+  BATCH_SIZE: 32
+  LR_ACTOR: 5e-5 #learning rate of the actor
+  LR_DECAY: 0.9
+  DISCOUNT: 0.99
+  UPDATE_TARGET_EVERY: 5
+  EPISODES: 300
+  epsilon: 1
+  EPSILON_DECAY: 0.9995
+  MIN_EPSILON: 0.001
+  SHOW_EVERY: 1000
+  REPEAT: 300
