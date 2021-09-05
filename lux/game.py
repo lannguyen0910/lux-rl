@@ -72,6 +72,7 @@ class Missions(defaultdict):
 
 
 class Game:
+
     def _initialize(self, messages):
         """
         initialize state
@@ -85,12 +86,6 @@ class Game:
         self.map: GameMap = GameMap(self.map_width, self.map_height)
         self.players: List[Player] = [Player(0), Player(1)]
 
-        self.night_turns_left = (360 - self.turn)//40 * \
-            10 + min(10, (360 - self.turn) % 40)
-        self.turns_to_night = (30 - self.turn) % 40
-        self.turns_to_dawn = (40 - self.turn % 40)
-        self.is_day_time = self.turns_to_dawn > 11
-
     def _end_turn(self):
         print("D_FINISH")
 
@@ -102,24 +97,37 @@ class Game:
         self.players[1].cities = {}
         self.players[1].city_tile_count = 0
 
-        self.player = self.players[self.player_id]
-        self.opponent = self.players[1 - self.player_id]
+        self.player: Player = self.players[self.player_id]
+        self.opponent: Player = self.players[1 - self.player_id]
 
     def _update(self, messages):
         """
-        update state
+        Update state
         """
         self.map = GameMap(self.map_width, self.map_height)
         self.turn += 1
         self._reset_player_states()
+
+        # Constants
+        self.night_turns_left = (360 - self.turn)//40 * \
+            10 + min(10, (360 - self.turn) % 40)
+
+        self.turns_to_night = (30 - self.turn) % 40
+        self.turns_to_night = 0 if self.turns_to_night > 30 else self.turns_to_night
+
+        self.turns_to_dawn = (40 - self.turn % 40)
+        self.turns_to_dawn = 0 if self.turns_to_dawn > 10 else self.turns_to_dawn
+
+        self.is_day_time = self.turns_to_dawn == 0
 
         for update in messages:
             if update == "D_DONE":
                 break
             strs = update.split(" ")
             input_identifier = strs[0]
+
             if input_identifier == INPUT_CONSTANTS.RESEARCH_POINTS:
-                team = int(strs[1])
+                team = int(strs[1])   # probably player_id
                 self.players[team].research_points = int(strs[2])
 
             elif input_identifier == INPUT_CONSTANTS.RESOURCES:
@@ -141,6 +149,8 @@ class Game:
                 uranium = int(strs[9])
                 self.players[team].units.append(
                     Unit(team, unittype, unitid, x, y, cooldown, wood, coal, uranium))
+                self.map.get_cell(x, y).unit = Unit(
+                    team, unittype, unitid, x, y, cooldown, wood, coal, uranium)
 
             elif input_identifier == INPUT_CONSTANTS.CITY:
                 team = int(strs[1])
@@ -171,18 +181,21 @@ class Game:
         self.calculate_matrix()
         self.calculate_resource_matrix()
 
+        # make indexes
         self.player.make_index_units_by_id()
         self.opponent.make_index_units_by_id()
 
     def calculate_matrix(self):
         def init_zero_matrix():
-            return [[0 for _ in range(self.map_height) for _ in range(self.map_width)]]
+            # [TODO] check if order of map_height and map_width is correct
+            return [[0 for _ in range(self.map_width)] for _ in range(self.map_height)]
 
         self.empty_tile_matrix = init_zero_matrix()
 
         self.wood_amount_matrix = init_zero_matrix()
         self.coal_amount_matrix = init_zero_matrix()
         self.uranium_amount_matrix = init_zero_matrix()
+        self.resource_amount_matrix = init_zero_matrix()
 
         self.player_city_tile_matrix = init_zero_matrix()
         self.opponent_city_tile_matrix = init_zero_matrix()
@@ -192,41 +205,47 @@ class Game:
 
         self.empty_tile_matrix = init_zero_matrix()
 
-        for y in range(self.map_width):
-            for x in range(self.map_height):
+        for y in range(self.map_height):
+            for x in range(self.map_width):
                 cell = self.map.get_cell(x, y)
 
+                is_empty = True
+
+                if cell.unit:
+                    is_empty = False
+                    if cell.unit.team == self.player_id:
+                        self.player_units_matrix[y][x] += 1
+                    else:   # unit belongs to opponent
+                        self.opponent_units_matrix[y][x] += 1
+
                 if cell.has_resource():
+                    is_empty = False
                     if cell.resource.type == RESOURCE_TYPES.WOOD:
                         self.wood_amount_matrix[y][x] += cell.resource.amount
                     if cell.resource.type == RESOURCE_TYPES.COAL:
                         self.coal_amount_matrix[y][x] += cell.resource.amount
                     if cell.resource.type == RESOURCE_TYPES.URANIUM:
                         self.uranium_amount_matrix[y][x] += cell.resource.amount
+                    self.resource_amount_matrix[y][x] += cell.resource.amount
 
                 elif cell.citytile:
+                    is_empty = False
                     if cell.citytile.team == self.player_id:
                         self.player_city_tile_matrix[y][x] += 1
                     else:   # city tile belongs to opponent
                         self.opponent_city_tile_matrix[y][x] += 1
 
-                elif cell.unit:
-                    if cell.unit.team == self.player_id:
-                        self.player_units_matrix[y][x] += 1
-                    else:   # unit belongs to opponent
-                        self.opponent_units_matrix[y][x] += 1
-
-                else:
+                if is_empty:
                     self.empty_tile_matrix[y][x] += 1
 
         self.convert_into_sets()
 
     def convert_into_sets(self):
         # or should we use dict?
-        self.empty_tile_xy_set = set()
         self.wood_amount_xy_set = set()
         self.coal_amount_xy_set = set()
         self.uranium_amount_xy_set = set()
+        self.resource_amount_xy_set = set()
         self.player_city_tile_xy_set = set()
         self.opponent_city_tile_xy_set = set()
         self.player_units_xy_set = set()
@@ -234,24 +253,24 @@ class Game:
         self.empty_tile_xy_set = set()
 
         for set_object, matrix in [
-            [self.empty_tile_xy_set,            self.empty_tile_matrix],
             [self.wood_amount_xy_set,           self.wood_amount_matrix],
             [self.coal_amount_xy_set,           self.coal_amount_matrix],
             [self.uranium_amount_xy_set,        self.uranium_amount_matrix],
+            [self.resource_amount_xy_set,       self.resource_amount_matrix],
             [self.player_city_tile_xy_set,      self.player_city_tile_matrix],
             [self.opponent_city_tile_xy_set,    self.opponent_city_tile_matrix],
             [self.player_units_xy_set,          self.player_units_matrix],
             [self.opponent_units_xy_set,        self.opponent_units_matrix],
                 [self.empty_tile_xy_set,            self.empty_tile_matrix]]:
 
-            for y in range(self.map.width):
-                for x in range(self.map.height):
+            for y in range(self.map.height):
+                for x in range(self.map.width):
                     if matrix[y][x] > 0:
                         set_object.add((x, y))
 
         out_of_map = set()
-        for y in [-1, self.map_width]:
-            for x in range(self.map_height):
+        for y in [-1, self.map_height]:
+            for x in range(self.map_width):
                 out_of_map.add((x, y))
         for y in range(self.map_height):
             for x in [-1, self.map_width]:
@@ -260,90 +279,84 @@ class Game:
         self.occupied_xy_set = (self.player_units_xy_set | self.opponent_units_xy_set | self.player_city_tile_xy_set | out_of_map) \
             - self.player_city_tile_xy_set
 
+    def convolve(self, matrix):
+        new_matrix = matrix.copy()
+        new_matrix[:-1, :] += matrix[1:, :]
+        new_matrix[:, :-1] += matrix[:, 1:]
+        new_matrix[1:, :] += matrix[:-1, :]
+        new_matrix[:, 1:] += matrix[:, :-1]
+        return new_matrix.tolist()
+
     def calculate_resource_matrix(self):
+
         wood_fuel_rate = GAME_CONSTANTS["PARAMETERS"]["RESOURCE_TO_FUEL_RATE"][RESOURCE_TYPES.WOOD.upper(
         )]
+        wood_count_rate = GAME_CONSTANTS["PARAMETERS"]["WORKER_COLLECTION_RATE"][RESOURCE_TYPES.COAL.upper(
+        )]
         fuel_matrix = np.array(self.wood_amount_matrix) * wood_fuel_rate
-        rate_matrix = (fuel_matrix > 0) * wood_fuel_rate
+        count_matrix = (fuel_matrix > 0) * wood_count_rate
+        rate_matrix = (fuel_matrix > 0) * wood_fuel_rate * wood_count_rate
 
         if self.player.researched_coal():
             coal_fuel_rate = GAME_CONSTANTS["PARAMETERS"]["RESOURCE_TO_FUEL_RATE"][RESOURCE_TYPES.COAL.upper(
             )]
+            coal_count_rate = GAME_CONSTANTS["PARAMETERS"]["WORKER_COLLECTION_RATE"][RESOURCE_TYPES.COAL.upper(
+            )]
             coal_fuel_matrix = np.array(self.coal_amount_matrix)
             fuel_matrix += coal_fuel_matrix * coal_fuel_rate
-            rate_matrix += (coal_fuel_matrix > 0) * coal_fuel_rate
+            count_matrix += (coal_fuel_matrix > 0) * coal_count_rate
+            rate_matrix += (coal_fuel_matrix > 0) * \
+                coal_fuel_rate * coal_count_rate
 
         if self.player.researched_uranium():
             uranium_fuel_rate = GAME_CONSTANTS["PARAMETERS"]["RESOURCE_TO_FUEL_RATE"][RESOURCE_TYPES.URANIUM.upper(
             )]
+            uranium_count_rate = GAME_CONSTANTS["PARAMETERS"]["WORKER_COLLECTION_RATE"][RESOURCE_TYPES.URANIUM.upper(
+            )]
             uranium_fuel_matrix = np.array(self.uranium_amount_matrix)
             fuel_matrix += uranium_fuel_matrix * uranium_fuel_rate
-            rate_matrix += (uranium_fuel_matrix > 0) * uranium_fuel_rate
+            count_matrix += (uranium_fuel_matrix > 0) * uranium_count_rate
+            rate_matrix += (uranium_fuel_matrix > 0) * \
+                uranium_fuel_rate * uranium_count_rate
 
-        def convolve(matrix):
-            new_matrix = matrix.copy()
-            new_matrix[:-1, :] += matrix[1:, :]
-            new_matrix[:, :-1] += matrix[:, 1:]
-            new_matrix[1:, :] += matrix[:-1, :]
-            new_matrix[:, 1:] += matrix[:, :-1]
-            return new_matrix.tolist()
-
-        self.resource_fuel_matrix = fuel_matrix
-        self.resource_rate_matrix = rate_matrix
-        self.convolved_fuel_matrix = convolve(fuel_matrix)
-        self.convolved_rate_matrix = convolve(rate_matrix)
+        self.resource_fuel_matrix = fuel_matrix.tolist()
+        self.resource_count_matrix = count_matrix.tolist()
+        self.resource_rate_matrix = rate_matrix.tolist()
+        self.convolved_fuel_matrix = self.convolve(fuel_matrix)
+        self.convolved_count_matrix = self.convolve(count_matrix)
+        self.convolved_rate_matrix = self.convolve(rate_matrix)
 
         self.calculate_resource_maxpool_matrix()
+
+    def calculate_dominance_matrix(self, feature_matrix, masking_factor=0.5):
+        mask = (1 - masking_factor * np.array(self.player_units_matrix))
+        feature_matrix = self.convolve(np.array(feature_matrix))
+        masked_matrix = mask * np.array(feature_matrix)
+        return masked_matrix
 
     def calculate_resource_maxpool_matrix(self):
         width, height = self.map_width, self.map_height
         resource_maxpool_matrix = [
-            [0 for _ in range(width) for _ in range(height)]]
+            [0 for _ in range(width)] for _ in range(height)]
 
         for y in range(height):
             for x in range(width):
-                for dx, dy in [(1, 0), (0, 1), (0, 0), (-1, 0), (0, -1)]:
+                for dx, dy in [(1, 0), (0, 1), (-1, 0), (0, -1)]:
                     xx, yy = x+dx, y+dy
                     if not (0 <= xx < width and 0 <= yy < height):
                         continue
-                    if self.resource_scores_matrix[yy][xx] + dx * 0.2 + dy * 0.1 > self.resource_scores_matrix[x][y]:
+                    if self.convolved_fuel_matrix[yy][xx] + dx * 0.2 + dy * 0.1 > self.convolved_fuel_matrix[y][x]:
                         break
-                    else:
-                        resource_maxpool_matrix[y][x] = self.resource_scores_matrix[y][x]
+                else:
+                    resource_maxpool_matrix[y][x] = self.convolved_fuel_matrix[y][x]
 
         self.resource_maxpool_matrix = resource_maxpool_matrix
 
-    def get_city_tile_matrix(self) -> List[List[int]]:
-        width, height = self.map_width, self.map_height
-        player = self.player
-        city_tile_matrix = [
-            [0 for _ in range(width) for _ in range(height)]]
+    def get_nearest_empty_tile_and_distance(self, current_position: Position) -> Tuple[Position, int]:
+        if tuple(current_position) not in self.resource_amount_xy_set:
+            if tuple(current_position) not in self.player_city_tile_xy_set:
+                return current_position, 0
 
-        for _, city in player.cities.items():
-            for city_tile in city.citytiles:
-                city_tile_matrix[city_tile.pos.y][city_tile.pos.x] += 1
-
-        return city_tile_matrix
-
-    def get_empty_tile_matrix(self) -> List[List[int]]:
-        width, height = self.map_width, self.map_height
-        empty_tile_matrix = [
-            [0 for _ in range(width) for _ in range(height)]]
-
-        for y in range(height):
-            for x in range(width):
-                cell = self.map.get_cell(x, y)
-                if cell.has_resource():
-                    continue
-                if cell.citytile:
-                    continue
-                empty_tile_matrix[y][x] = 1
-
-        return empty_tile_matrix
-
-    def get_nearest_empty_tile(self, current_position: Position) -> Tuple[Position, int]:
-        if tuple(current_position) in self.player_units_xy_set:
-            return current_position, 0
         width, height = self.map_width, self.map_height
 
         nearest_distance = width + height
@@ -352,39 +365,12 @@ class Game:
         for y in range(height):
             for x in range(width):
                 if self.empty_tile_matrix[y][x] == 0:  # not empty
-                    position = Position(x, y)
-                    distance = position - current_position
-                    if distance < nearest_distance:
-                        nearest_distance = distance
-                        nearest_position = position
+                    continue
+
+                position = Position(x, y)
+                distance = position - current_position
+                if distance < nearest_distance:
+                    nearest_distance = distance
+                    nearest_position = position
 
         return nearest_position, nearest_distance
-
-    def calculate_occupied_and_free_zones(self) -> None:
-        player, opponent = self.player, self.opponent
-
-        set_occupied_xy = set()
-        set_player_city_tiles_xy = set()
-
-        for city in player.cities.values():
-            for city_tile in city.citytiles:
-                xy = (city_tile.pos.x, city_tile.pos.y)
-                set_player_city_tiles_xy.add(xy)
-
-        for unit in player.units:
-            xy = (unit.pos.x, unit.pos.y)
-            if xy in set_player_city_tiles_xy:
-                continue
-            set_occupied_xy.add(xy)
-
-        for city in opponent.cities.values():
-            for city_tile in city.citytiles:
-                xy = (city_tile.pos.x, city_tile.pos.y)
-                set_occupied_xy.add(xy)
-
-        for unit in opponent.units:
-            xy = (unit.pos.x, unit.pos.y)
-            set_occupied_xy.add(xy)
-
-        self.map.set_occupied_xy = set_occupied_xy
-        self.map.set_player_city_tiles_xy = set_player_city_tiles_xy
