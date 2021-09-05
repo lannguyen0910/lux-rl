@@ -85,6 +85,7 @@ class Game:
         self.players = [Player(0), Player(1)]
 
         self.resource_scores_matrix = None
+        self.resource_rates_matrix = None
         self.maxpool_scores_matrix = None
         self.city_tile_matrix = None
         self.empty_tile_matrix = None
@@ -100,7 +101,8 @@ class Game:
         self.players[1].cities = {}
         self.players[1].city_tile_count = 0
 
-        self.current_player = self.players[self.player_id]
+        self.player = self.players[self.player_id]
+        self.opponent = self.players[1 - self.player_id]
 
     def _update(self, messages):
         """
@@ -165,20 +167,26 @@ class Game:
                 self.map.get_cell(x, y).road = road
 
         # update matrices
-        self.resource_scores_matrix = self.calculate_resource_scores_matrix()
+        self.calculate_resource_scores_and_rates_matrix()
         self.maxpool_scores_matrix = self.calculate_resource_maxpool_matrix()
         self.city_tile_matrix = self.get_city_tile_matrix()
         self.empty_tile_matrix = self.get_empty_tile_matrix()
 
-    def calculate_resource_scores_matrix(self) -> List[List[int]]:
+        self.player.make_index_units_by_id()
+        self.opponent.make_index_units_by_id()
+
+    def calculate_resource_scores_and_rates_matrix(self) -> List[List[int]]:
         width, height = self.map_width, self.map_height
-        player = self.current_player
+        player = self.player
         resource_scores_matrix = [
             [0 for _ in range(width) for _ in range(height)]]
+        resource_rates_matrix = [
+            [0 for _ in range(width)] for _ in range(height)]
 
         for y in range(height):
             for x in range(width):
                 resource_scores_cell = 0
+                resource_rates_cell = 0
                 for dx, dy in [(0, 0), (0, -1), (0, 1), (1, 0), (-1, 0)]:
                     xx, yy = x+dx, y+dy
                     if 0 <= xx < width and 0 <= yy < height:
@@ -192,11 +200,17 @@ class Game:
 
                         fuel = GAME_CONSTANTS["PARAMETERS"]["RESOURCE_TO_FUEL_RATE"][str(
                             cell.resource.type).upper()]
+                        mining_rate = GAME_CONSTANTS["PARAMETERS"]["WORKER_COLLECTION_RATE"][str(
+                            cell.resource.type).upper()]
+
                         resource_scores_cell += fuel * cell.resource.amount
+                        resource_rates_cell += fuel * mining_rate
 
                 resource_scores_matrix[y][x] = resource_scores_cell
+                resource_rates_matrix[y][x] = resource_rates_cell
 
-        return resource_scores_matrix
+        self.resource_scores_matrix = resource_scores_matrix
+        self.resource_rates_matrix = resource_rates_matrix
 
     def calculate_resource_maxpool_matrix(self) -> List[List[int]]:
         width, height = self.map_width, self.map_height
@@ -218,7 +232,7 @@ class Game:
 
     def get_city_tile_matrix(self) -> List[List[int]]:
         width, height = self.map_width, self.map_height
-        player = self.current_player
+        player = self.player
         city_tile_matrix = [
             [0 for _ in range(width) for _ in range(height)]]
 
@@ -241,5 +255,22 @@ class Game:
                 if cell.citytile:
                     continue
                 empty_tile_matrix[y][x] = 1
-        
+
         return empty_tile_matrix
+
+    def get_nearest_empty_tile(self, current_position: Position) -> Tuple[Position, int]:
+        width, height = self.map_width, self.map_height
+
+        nearest_distance = width + height
+        nearest_position = None
+
+        for y in range(height):
+            for x in range(width):
+                if self.empty_tile_matrix[y][x] == 1:
+                    position = Position(x, y)
+                    distance = position - current_position
+                    if distance < nearest_distance:
+                        nearest_distance = distance
+                        nearest_position = position
+
+        return nearest_position, nearest_distance
