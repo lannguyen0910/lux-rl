@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Tuple, Set
 from .constants import Constants
 from .game_objects import CityTile, Unit
 from .game_position import Position
@@ -34,6 +34,9 @@ class GameMap:
             self.map[y] = [None] * width
             for x in range(0, self.width):
                 self.map[y][x] = Cell(x, y)
+        
+        self.set_occupied_xy: Set[Tuple] = set()
+        self.set_player_city_tiles_xy: Set[Tuple] = set()
 
     def get_cell_by_pos(self, pos) -> Cell:
         return self.map[pos.y][pos.x]

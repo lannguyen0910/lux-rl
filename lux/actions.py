@@ -4,7 +4,7 @@ from lux.constants import Constants
 from lux.game_constants import GAME_CONSTANTS
 from lux import annotate
 
-from .game_cluster import *
+from .find_cluster import *
 import re
 
 def pretty_print(obj, indent=1, rec=0, key=''):
