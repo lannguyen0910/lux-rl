@@ -167,14 +167,90 @@ class Game:
                 self.map.get_cell(x, y).road = road
 
         # update matrices
+        self.calculate_matrix()
         self.calculate_resource_scores_and_rates_matrix()
-        self.maxpool_scores_matrix = self.calculate_resource_maxpool_matrix()
-        self.city_tile_matrix = self.get_city_tile_matrix()
-        self.empty_tile_matrix = self.get_empty_tile_matrix()
-        self.calculate_occupied_and_free_zones()
+        self.calculate_resource_maxpool_matrix()
 
         self.player.make_index_units_by_id()
         self.opponent.make_index_units_by_id()
+
+    def calculate_matrix(self) -> None:
+        def init_zero_matrix():
+            return [[0 for _ in range(self.map_height) for _ in range(self.map_width)]]
+
+        self.empty_tile_matrix = init_zero_matrix()
+
+        self.wood_amount_matrix = init_zero_matrix()
+        self.coal_amount_matrix = init_zero_matrix()
+        self.uranium_amount_matrix = init_zero_matrix()
+
+        self.player_city_tile_matrix = init_zero_matrix()
+        self.opponent_city_tile_matrix = init_zero_matrix()
+
+        self.player_units_matrix = init_zero_matrix()
+        self.opponent_units_matrix = init_zero_matrix()
+
+        self.empty_tile_matrix = init_zero_matrix()
+
+        for y in range(self.map_width):
+            for x in range(self.map_height):
+                cell = self.map.get_cell(x, y)
+
+                if cell.has_resource():
+                    if cell.resource.type == RESOURCE_TYPES.WOOD:
+                        self.wood_amount_matrix[y][x] += cell.resource.amount
+                    if cell.resource.type == RESOURCE_TYPES.COAL:
+                        self.coal_amount_matrix[y][x] += cell.resource.amount
+                    if cell.resource.type == RESOURCE_TYPES.URANIUM:
+                        self.uranium_amount_matrix[y][x] += cell.resource.amount
+
+                elif cell.citytile:
+                    if cell.citytile.team == self.player_id:
+                        self.player_city_tile_matrix[y][x] += 1
+                    else:   # city tile belongs to opponent
+                        self.opponent_city_tile_matrix[y][x] += 1
+
+                elif cell.unit:
+                    if cell.unit.team == self.player_id:
+                        self.player_units_matrix[y][x] += 1
+                    else:   # unit belongs to opponent
+                        self.opponent_units_matrix[y][x] += 1
+
+                else:
+                    self.empty_tile_matrix[y][x] += 1
+
+        self.convert_into_sets()
+    
+    def convert_into_sets(self):
+        # or should we use dict?
+        self.empty_tile_xy_set = set()
+        self.wood_amount_xy_set = set()
+        self.coal_amount_xy_set = set()
+        self.uranium_amount_xy_set = set()
+        self.player_city_tile_xy_set = set()
+        self.opponent_city_tile_xy_set = set()
+        self.player_units_xy_set = set()
+        self.opponent_units_xy_set = set()
+        self.empty_tile_xy_set = set()
+
+        for set_object, matrix in [
+            [self.empty_tile_xy_set,            self.empty_tile_matrix],
+            [self.wood_amount_xy_set,           self.wood_amount_matrix],
+            [self.coal_amount_xy_set,           self.coal_amount_matrix],
+            [self.uranium_amount_xy_set,        self.uranium_amount_matrix],
+            [self.player_city_tile_xy_set,      self.player_city_tile_matrix],
+            [self.opponent_city_tile_xy_set,    self.opponent_city_tile_matrix],
+            [self.player_units_xy_set,          self.player_units_matrix],
+            [self.opponent_units_xy_set,        self.opponent_units_matrix],
+                [self.empty_tile_xy_set,            self.empty_tile_matrix]]:
+
+            for y in range(self.map.width):
+                for x in range(self.map.height):
+                    if matrix[y][x] > 0:
+                        set_object.add((x, y))
+
+        self.map.set_occupied_xy = (self.player_units_xy_set | self.opponent_units_xy_set | self.player_city_tile_xy_set) \
+            - self.player_city_tile_xy_set
 
     def calculate_resource_scores_and_rates_matrix(self) -> None:
         width, height = self.map_width, self.map_height
@@ -213,7 +289,7 @@ class Game:
         self.resource_scores_matrix = resource_scores_matrix
         self.resource_rates_matrix = resource_rates_matrix
 
-    def calculate_resource_maxpool_matrix(self) -> List[List[int]]:
+    def calculate_resource_maxpool_matrix(self) -> None:
         width, height = self.map_width, self.map_height
         maxpool_scores_matrix = [
             [0 for _ in range(width) for _ in range(height)]]
@@ -229,7 +305,7 @@ class Game:
                     else:
                         maxpool_scores_matrix[y][x] = self.resource_scores_matrix[y][x]
 
-        return maxpool_scores_matrix
+        self.maxpool_scores_matrix = maxpool_scores_matrix
 
     def get_city_tile_matrix(self) -> List[List[int]]:
         width, height = self.map_width, self.map_height
@@ -263,7 +339,7 @@ class Game:
         width, height = self.map_width, self.map_height
 
         nearest_distance = width + height
-        nearest_position = None
+        nearest_position: Position = None
 
         for y in range(height):
             for x in range(width):
