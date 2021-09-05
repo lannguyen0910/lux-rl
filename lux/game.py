@@ -1,9 +1,12 @@
 from typing import DefaultDict, Dict, List, Tuple, Set
 from collections import defaultdict, deque
 from .constants import Constants
-from .game_map import GameMap
+from .game_map import RESOURCE_TYPES, GameMap
 from .game_objects import Player, Unit, City, CityTile
 from .game_position import Position
+from .game_constants import GAME_CONSTANTS
+
+
 INPUT_CONSTANTS = Constants.INPUT_CONSTANTS
 
 
@@ -72,7 +75,7 @@ class Game:
         """
         initialize state
         """
-        self.id = int(messages[0])
+        self.player_id = int(messages[0])
         self.turn = -1
         # get some other necessary initial input
         mapInfo = messages[1].split(" ")
@@ -80,6 +83,11 @@ class Game:
         self.map_height = int(mapInfo[1])
         self.map = GameMap(self.map_width, self.map_height)
         self.players = [Player(0), Player(1)]
+
+        self.resource_scores_matrix = None
+        self.maxpool_scores_matrix = None
+        self.city_tile_matrix = None
+        self.empty_tile_matrix = None
 
     def _end_turn(self):
         print("D_FINISH")
@@ -91,6 +99,8 @@ class Game:
         self.players[1].units = []
         self.players[1].cities = {}
         self.players[1].city_tile_count = 0
+
+        self.current_player = self.players[self.player_id]
 
     def _update(self, messages):
         """
@@ -153,3 +163,83 @@ class Game:
                 y = int(strs[2])
                 road = float(strs[3])
                 self.map.get_cell(x, y).road = road
+
+        # update matrices
+        self.resource_scores_matrix = self.calculate_resource_scores_matrix()
+        self.maxpool_scores_matrix = self.calculate_resource_maxpool_matrix()
+        self.city_tile_matrix = self.get_city_tile_matrix()
+        self.empty_tile_matrix = self.get_empty_tile_matrix()
+
+    def calculate_resource_scores_matrix(self) -> List[List[int]]:
+        width, height = self.map_width, self.map_height
+        player = self.current_player
+        resource_scores_matrix = [
+            [0 for _ in range(width) for _ in range(height)]]
+
+        for y in range(height):
+            for x in range(width):
+                resource_scores_cell = 0
+                for dx, dy in [(0, 0), (0, -1), (0, 1), (1, 0), (-1, 0)]:
+                    xx, yy = x+dx, y+dy
+                    if 0 <= xx < width and 0 <= yy < height:
+                        cell = self.map.get_cell(xx, yy)
+                        if not cell.has_resource():
+                            continue
+                        if not player.researched_coal() and cell.resource.type == RESOURCE_TYPES.COAL:
+                            continue
+                        if not player.researched_uranium() and cell.resource.type == RESOURCE_TYPES.URANIUM:
+                            continue
+
+                        fuel = GAME_CONSTANTS["PARAMETERS"]["RESOURCE_TO_FUEL_RATE"][str(
+                            cell.resource.type).upper()]
+                        resource_scores_cell += fuel * cell.resource.amount
+
+                resource_scores_matrix[y][x] = resource_scores_cell
+
+        return resource_scores_matrix
+
+    def calculate_resource_maxpool_matrix(self) -> List[List[int]]:
+        width, height = self.map_width, self.map_height
+        maxpool_scores_matrix = [
+            [0 for _ in range(width) for _ in range(height)]]
+
+        for y in range(height):
+            for x in range(width):
+                for dx, dy in [(1, 0), (0, 1), (0, 0), (-1, 0), (0, -1)]:
+                    xx, yy = x+dx, y+dy
+                    if not (0 <= xx < width and 0 <= yy < height):
+                        continue
+                    if self.resource_scores_matrix[yy][xx] + dx * 0.2 + dy * 0.1 > self.resource_scores_matrix[x][y]:
+                        break
+                    else:
+                        maxpool_scores_matrix[y][x] = self.resource_scores_matrix[y][x]
+
+        return maxpool_scores_matrix
+
+    def get_city_tile_matrix(self) -> List[List[int]]:
+        width, height = self.map_width, self.map_height
+        player = self.current_player
+        city_tile_matrix = [
+            [0 for _ in range(width) for _ in range(height)]]
+
+        for _, city in player.cities.items():
+            for city_tile in city.citytiles:
+                city_tile_matrix[city_tile.pos.y][city_tile.pos.x] += 1
+
+        return city_tile_matrix
+
+    def get_empty_tile_matrix(self) -> List[List[int]]:
+        width, height = self.map_width, self.map_height
+        empty_tile_matrix = [
+            [0 for _ in range(width) for _ in range(height)]]
+
+        for y in range(height):
+            for x in range(width):
+                cell = self.map.get_cell(x, y)
+                if cell.has_resource():
+                    continue
+                if cell.citytile:
+                    continue
+                empty_tile_matrix[y][x] = 1
+        
+        return empty_tile_matrix
