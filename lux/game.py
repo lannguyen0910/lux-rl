@@ -1,4 +1,6 @@
 import numpy as np
+import heapq
+
 from typing import DefaultDict, Dict, List, Tuple, Set
 from collections import defaultdict, deque
 from .constants import Constants
@@ -9,6 +11,7 @@ from .game_constants import GAME_CONSTANTS
 
 
 INPUT_CONSTANTS = Constants.INPUT_CONSTANTS
+DISTANCE_TRANSITION_VALUE = 12
 
 
 class Mission:
@@ -71,6 +74,44 @@ class Missions(defaultdict):
         return [mission.target_position for unit_id, mission in self.items()]
 
 
+class DisjointSet:
+    def __init__(self):
+        self.parent = {}
+
+    def find(self, item, index=False):
+        if item not in self.parent:
+            if not index:
+                return None
+        return self._index(item)
+
+    def _index(self, item):
+        if item not in self.parent:
+            self.parent[item] = item
+            return item
+        elif self.parent[item] == item:
+            return item
+        else:
+            res = self.find(self.parent[item])
+            self.parent[item] = res
+            return res
+
+    def union(self, set1, set2):
+        root1 = self._index(set1)
+        root2 = self._index(set2)
+        self.parent[root1] = root2
+
+    def get_groups(self):
+        groups = defaultdict(list)
+        for element in self.parent:
+            leader = self.find(element)
+            if leader:
+                groups[leader].append(element)
+        return groups.values()
+
+    def get_group_count(self):
+        return sum(len(group) > 1 for group in self.get_groups())
+
+
 class Game:
 
     def _initialize(self, messages):
@@ -87,6 +128,9 @@ class Game:
         self.players: List[Player] = [Player(0), Player(1)]
 
         self.targeted_xy_set: Set = set()
+        self.targeted_leaders: Set = set()
+
+        self.distance_transition_value = 8
 
     def _end_turn(self):
         print("D_FINISH")
@@ -182,14 +226,16 @@ class Game:
         # update matrices
         self.calculate_matrix()
         self.calculate_resource_matrix()
+        self.calculate_resource_groups()
+        self.calculate_distance_matrix()
 
         # make indexes
         self.player.make_index_units_by_id()
         self.opponent.make_index_units_by_id()
 
-    def init_zero_matrix(self):
+    def init_zero_matrix(self, default_value=0):
         # [TODO] check if order of map_height and map_width is correct
-        return np.zeros((self.map_height, self.map_width))
+        return np.full((self.map_height, self.map_width), default_value)
 
     def calculate_matrix(self):
 
@@ -198,7 +244,7 @@ class Game:
         self.wood_amount_matrix = self.init_zero_matrix()
         self.coal_amount_matrix = self.init_zero_matrix()
         self.uranium_amount_matrix = self.init_zero_matrix()
-        self.resource_amount_matrix = self.init_zero_matrix()
+        self.all_resource_amount_matrix = self.init_zero_matrix()
 
         self.player_city_tile_matrix = self.init_zero_matrix()
         self.opponent_city_tile_matrix = self.init_zero_matrix()
@@ -230,7 +276,8 @@ class Game:
                     if cell.resource.type == RESOURCE_TYPES.URANIUM:
                         self.uranium_amount_matrix[y,
                                                    x] += cell.resource.amount
-                    self.resource_amount_matrix[y, x] += cell.resource.amount
+                    self.all_resource_amount_matrix[y,
+                                                    x] += cell.resource.amount
 
                 elif cell.citytile:
                     is_empty = False
@@ -249,7 +296,6 @@ class Game:
         self.wood_amount_xy_set = set()
         self.coal_amount_xy_set = set()
         self.uranium_amount_xy_set = set()
-        self.resource_amount_xy_set = set()
         self.player_city_tile_xy_set = set()
         self.opponent_city_tile_xy_set = set()
         self.player_units_xy_set = set()
@@ -260,7 +306,6 @@ class Game:
             [self.wood_amount_xy_set,           self.wood_amount_matrix],
             [self.coal_amount_xy_set,           self.coal_amount_matrix],
             [self.uranium_amount_xy_set,        self.uranium_amount_matrix],
-            [self.resource_amount_xy_set,       self.resource_amount_matrix],
             [self.player_city_tile_xy_set,      self.player_city_tile_matrix],
             [self.opponent_city_tile_xy_set,    self.opponent_city_tile_matrix],
             [self.player_units_xy_set,          self.player_units_matrix],
@@ -280,8 +325,86 @@ class Game:
             for x in [-1, self.map_width]:
                 out_of_map.add((x, y))
 
-        self.occupied_xy_set = (self.player_units_xy_set | self.opponent_units_xy_set | self.player_city_tile_xy_set | out_of_map) \
+        self.occupied_xy_set = (self.player_units_xy_set | self.opponent_units_xy_set | self.opponent_city_tile_xy_set | out_of_map) \
             - self.player_city_tile_xy_set
+
+    def calculate_distance_matrix(self, distance_transition_value=DISTANCE_TRANSITION_VALUE, blockade_multiplier_value=5):
+        # calculate distance from resource (with fulfilled research requirements)
+        visited = set()
+        self.distance_from_resource = self.init_zero_matrix(
+            self.map_height + self.map_width)
+        for y in range(self.map_height):
+            for x in range(self.map_width):
+                if self.resource_rate_matrix[y, x] > 0:
+                    visited.add((x, y))
+                    self.distance_from_resource[y, x] = 0
+
+        queue = deque(list(visited))
+        while queue:
+            x, y = queue.popleft()
+            for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
+                xx, yy = x+dx, y+dy
+                if (xx, yy) in visited:
+                    continue
+                if 0 <= xx < self.map_width and 0 <= yy < self.map_height:
+                    self.distance_from_resource[yy,
+                                                xx] = self.distance_from_resource[y, x] + 1
+                    queue.append((xx, yy))
+                    visited.add((xx, yy))
+
+        # calculating the full matrix takes too much time
+        self.positions_to_calculate_distances_from = set()
+        for x, y in self.player_units_xy_set:
+            self.positions_to_calculate_distances_from.add((x, y),)
+            self.positions_to_calculate_distances_from.add((x+1, y),)
+            self.positions_to_calculate_distances_from.add((x-1, y),)
+            self.positions_to_calculate_distances_from.add((x, y+1),)
+            self.positions_to_calculate_distances_from.add((x, y-1),)
+
+        self.distance_matrix = np.full(
+            (self.map_height, self.map_width, self.map_height, self.map_width), 1001)
+
+        for sy in range(self.map_height):
+            for sx in range(self.map_width):
+                if (sx, sy) not in self.positions_to_calculate_distances_from:
+                    continue
+
+                start_pos = (sx, sy)
+                xy_processed = set()
+
+                d4 = [(1, 0), (0, 1), (-1, 0), (0, -1)]
+                heap = [(0, start_pos), ]
+                while heap:
+                    curdist, (x, y) = heapq.heappop(heap)
+                    if (x, y) in xy_processed:
+                        continue
+                    xy_processed.add((x, y),)
+                    self.distance_matrix[sy, sx, y, x] = curdist
+
+                    for dx, dy in d4:
+                        xx, yy = x+dx, y+dy
+                        if not (0 <= xx < self.map_width and 0 <= yy < self.map_height):
+                            continue
+                        if (xx, yy) in xy_processed:
+                            continue
+
+                        # lazy_processing
+                        if abs(sx-xx) + abs(sy-yy) > distance_transition_value:
+                            continue
+
+                        edge_length = 1
+                        if (xx, yy) in self.occupied_xy_set:
+                            edge_length = blockade_multiplier_value
+                        heapq.heappush(heap, (curdist + edge_length, (xx, yy)))
+
+    def retrieve_distance(self, sx, sy, ex, ey, distance_transition_value=DISTANCE_TRANSITION_VALUE, long_range_multiplier_value=5):
+        if abs(sx-ex) + abs(sy-ey) > distance_transition_value:
+            return (abs(sx-ex) + abs(sy-ey)) * long_range_multiplier_value
+
+        if (sx, sy) not in self.positions_to_calculate_distances_from:
+            return (abs(sx-ex) + abs(sy-ey)) * long_range_multiplier_value
+
+        return self.distance_matrix[sy, sx, ey, ex]
 
     def convolve(self, matrix):
         new_matrix = matrix.copy()
@@ -335,11 +458,45 @@ class Game:
         self.convolved_count_matrix = self.convolve(self.resource_count_matrix)
         self.convolved_rate_matrix = self.convolve(self.resource_rate_matrix)
 
-    def repopulate_targets(self, pos_list: List[Position]):
+    def calculate_resource_groups(self):
+        self.xy_to_resource_group_id: DisjointSet = DisjointSet()
+        for y in range(self.map_height):
+            for x in range(self.map_width):
+                if self.resource_rate_matrix[y, x] > 0:
+                    for dy, dx in [(1, 0), (0, 1), (-1, 0), (0, -1)]:
+                        xx, yy = x+dx, y+dy
+                        if 0 <= yy < self.map_height and 0 <= xx < self.map_width:
+                            self.xy_to_resource_group_id.union(
+                                (x, y), (xx, yy))
+
+    def repopulate_targets(self, missions: Missions):
+        pos_list = missions.get_targets()
+        self.targeted_leaders: Set = set(
+            self.xy_to_resource_group_id.find(tuple(pos)) for pos in pos_list)
         self.targeted_xy_set: Set = set(
             tuple(pos) for pos in pos_list) - self.player_city_tile_xy_set
 
+        self.resource_leader_to_locating_units: DefaultDict[Tuple, Set[str]] = defaultdict(
+            set)
+        self.resource_leader_to_targeting_units: DefaultDict[Tuple, Set[str]] = defaultdict(
+            set)
+
+        for unit_id in missions:
+
+            unit: Unit = self.player.units_by_id[unit_id]
+            current_position = tuple(unit.pos)
+            leader = self.xy_to_resource_group_id.find(current_position)
+            if leader:
+                self.resource_leader_to_locating_units[leader].add(unit_id)
+
+            mission: Mission = missions[unit_id]
+            target_position = tuple(mission.target_position)
+            leader = self.xy_to_resource_group_id.find(target_position)
+            if leader:
+                self.resource_leader_to_targeting_units[leader].add(unit_id)
+
     def calculate_dominance_matrix(self, feature_matrix, masking_factor=0.5, exempted=(-1, -1)):
+        # [TODO] marked for deletion
         mask = (1 - masking_factor * self.player_units_matrix)
         feature_matrix = self.convolve(feature_matrix)
         masked_matrix = mask * feature_matrix
@@ -350,7 +507,7 @@ class Game:
         return masked_matrix
 
     def get_nearest_empty_tile_and_distance(self, current_position: Position) -> Tuple[Position, int]:
-        if tuple(current_position) not in self.resource_amount_xy_set:
+        if self.all_resource_amount_matrix[current_position.y, current_position.x] == 0:
             if tuple(current_position) not in self.player_city_tile_xy_set:
                 return current_position, 0
 
@@ -366,6 +523,10 @@ class Game:
 
                 position = Position(x, y)
                 distance = position - current_position
+
+                if self.distance_from_resource[y, x] != 1:
+                    distance += 10
+
                 if distance < nearest_distance:
                     nearest_distance = distance
                     nearest_position = position
