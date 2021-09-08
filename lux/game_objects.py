@@ -164,7 +164,10 @@ class Unit:
         """
         return "p {}".format(self.id)
 
-    def compute_travel_range(self, turn_info=None) -> None:
+    def compute_travel_range(self, turn_info=None):
+        """
+        Calculate range for unit 
+        """
         fuel_per_turn = GAME_CONSTANTS["PARAMETERS"]["LIGHT_UPKEEP"]["WORKER"]
         cooldown_required = GAME_CONSTANTS["PARAMETERS"]["UNIT_ACTION_COOLDOWN"]["WORKER"]
         day_length = GAME_CONSTANTS["PARAMETERS"]["DAY_LENGTH"]

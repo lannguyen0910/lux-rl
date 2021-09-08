@@ -7,6 +7,7 @@ from lux import annotate
 
 from .find_cluster import *
 import re
+import collections
 
 
 def pretty_print(obj, indent=1, rec=0, key=''):
@@ -90,12 +91,6 @@ def make_city_actions(game_state: Game, DEBUG=False) -> List[str]:
             do_research(city_tile)
             continue
 
-        if not player.researched_coal() and len(city_tiles) > 4 and len(city_tiles) % 2:
-            # accelerate coal reasearch
-            print("research for coal", city_tile.pos.x, city_tile.pos.y)
-            do_research(city_tile)
-            continue
-
         best_position, best_cell_value = find_best_cluster(
             game_state, city_tile.pos)
         if not unit_limit_exceeded and best_cell_value > 0:
@@ -105,7 +100,7 @@ def make_city_actions(game_state: Game, DEBUG=False) -> List[str]:
             continue
 
         if not player.researched_uranium():
-            # [TODO] dont bother researching uranium for smaller maps
+            # [TODO] dont bother researching uranium for maps with little uranium
             print("research", city_tile.pos.x, city_tile.pos.y)
             do_research(city_tile)
             continue
@@ -114,6 +109,7 @@ def make_city_actions(game_state: Game, DEBUG=False) -> List[str]:
 
     return actions
 
+
 def make_unit_missions(game_state: Game, missions: Missions, DEBUG=False) -> Missions:
     if DEBUG:
         print = __builtin__.print
@@ -121,54 +117,49 @@ def make_unit_missions(game_state: Game, missions: Missions, DEBUG=False) -> Mis
         print = lambda *args: None
 
     player = game_state.player
+    missions.cleanup(player)  # remove dead units
 
     for unit in player.units:
-        if not unit.can_act():
-            continue
-
-        if unit.id in missions.target_positions and unit.pos == missions.target_positions[unit.id]:
-            # do not make new missions
-            continue
+        # if not unit.can_act():
+        #     continue
 
         # if the unit is full and it is going to be day the next few days
-        # go to an empty tile and build a city
+        # go to an empty tile and build a citytile
         # print(unit.id, unit.get_cargo_space_left())
         if unit.get_cargo_space_left() == 0:
             nearest_position, nearest_distance = game_state.get_nearest_empty_tile_and_distance(
                 unit.pos)
             if nearest_distance < game_state.turns_to_night - 5:
-                print("plan mission build city", unit.id, nearest_position)
-                missions.target_positions[unit.id] = nearest_position
-                missions.target_actions[unit.id] = unit.build_city()
+                print("plan mission to build citytile",
+                      unit.id, nearest_position)
+                mission = Mission(unit.id, nearest_position, unit.build_city())
+                missions.add(mission)
                 continue
 
-        if unit.id in missions.target_positions:  # there is already a mission
+        if unit.id in missions and missions[unit.id].target_position == unit.pos:
+            # take action and not make missions if already at position
             continue
 
-        # continue camping
-        if game_state.convolved_rate_matrix[unit.pos.y][unit.pos.x] >= 80:
-            continue
-
-        # once a unit is built (detected as having max space)
-        # go to the best cluster
+        # once a unit is built or has build a house (detected as having max space)
+        # go to the best cluster biased towards being far
         if unit.get_cargo_space_left() == 100:
             best_position, best_cell_value = find_best_cluster(
-                game_state, unit.pos, random.uniform(-1, -0.5))
+                game_state, unit.pos, 1.0)
             # [TODO] what if best_cell_value is zero
             print("plan mission for fresh grad", unit.id, best_position)
-            missions.target_positions[unit.id] = best_position
-            missions.target_actions[unit.id] = None
+            mission = Mission(unit.id, best_position)
+            missions.add(mission)
             continue
 
         # if a unit is not receiving any resources
-        # move to a place with resources
-        if game_state.convolved_fuel_matrix[unit.pos.y][unit.pos.x] < 20:
+        # move to a place with resources biased towards being near
+        if game_state.convolved_fuel_matrix[unit.pos.y][unit.pos.x] <= 40:
             best_position, best_cell_value = find_best_cluster(
-                game_state, unit.pos, random.uniform(0.5, 1))
+                game_state, unit.pos, -0.1)
             # [TODO] what if best_cell_value is zero
             print("plan mission relocate for resources", unit.id, best_position)
-            missions.target_positions[unit.id] = best_position
-            missions.target_actions[unit.id] = unit.move("c")
+            mission = Mission(unit.id, best_position, None)
+            missions.add(mission)
             continue
 
         # otherwise just camp and farm resources
@@ -179,7 +170,6 @@ def make_unit_missions(game_state: Game, missions: Missions, DEBUG=False) -> Mis
 
         # [TODO] abort mission if block for multiple turns
 
-    missions.cleanup(player)
     return missions
 
 
@@ -194,41 +184,66 @@ def make_unit_actions(game_state: Game, missions: Missions, DEBUG=False) -> Tupl
 
     prev_actions_len = -1
     while prev_actions_len < len(actions):
-      prev_actions_len = len(actions)
+        prev_actions_len = len(actions)
 
-      for unit in player.units:
-        if not unit.can_act():
-            continue
+        for unit in player.units:
+            if not unit.can_act():
+                continue
 
-        # if there is no mission, continue
-        if (unit.id not in missions.target_positions) and (unit.id not in missions.target_actions):
-            continue
+            # if there is no mission, continue
+            if unit.id not in missions:
+                continue
 
-        print("making action for", unit.id, unit.pos)
+            mission: Mission = missions[unit.id]
 
-        # if the location is reached, take action
-        if unit.pos == missions.target_positions[unit.id]:
-            print("location reached and make action", unit.id, unit.pos)
-            action = missions.target_actions[unit.id]
-            if action:
+            print("attempting action for", unit.id, unit.pos)
+
+            # if the location is reached, take action
+            if unit.pos == mission.target_position:
+                print("location reached and make action", unit.id, unit.pos)
+                action = mission.target_action
+                if action:
+                    actions.append(action)
+                del missions[unit.id]
+                continue
+
+            # the unit will need to move
+            direction = attempt_direction_to(
+                game_state, unit, mission.target_position)
+            if direction != "c":
+                action = unit.move(direction)
+                print("make move", unit.id, unit.pos, direction)
                 actions.append(action)
+                continue
 
-            # missions.target_actions[unit.id] = unit.random_move()
-            missions.delete(unit.id)
-            continue
-
-        # the unit will need to move
-        direction = attempt_direction_to(
-            game_state, unit, missions.target_positions[unit.id])
-        if direction == "c":
-            continue
-        action = unit.move(direction)
-        print("make move", unit.id, unit.pos, direction)
-        actions.append(action)
-
-        # [TODO] make it possible for units to swap position
+            # [TODO] make it possible for units to swap positions
 
     return missions, actions
+
+
+def calculate_path_distance(game_state: Game, start_pos: Position, target_pos: Position, ignored_set: Set):
+    if start_pos == target_pos:
+        return 0
+
+    xy_to_distance = {}
+    xy_to_distance[tuple(start_pos)] = 0
+
+    d4 = [(1, 0), (0, 1), (-1, 0), (0, -1)]
+    stack = collections.deque([tuple(start_pos)])
+    while stack:
+        x, y = stack.popleft()
+        for dx, dy in d4:
+            xx, yy = x+dx, y+dy
+            # or (xx,yy) in ignored_set:
+            if (xx, yy) in xy_to_distance or (xx, yy) in game_state.occupied_xy_set:
+                continue
+            xy_to_distance[xx, yy] = xy_to_distance[x, y] + 1
+            stack.append((xx, yy))
+
+            if (xx, yy) == tuple(target_pos):
+                return xy_to_distance[xx, yy]
+
+    return 1001
 
 
 def attempt_direction_to(game_state: Game, unit: Unit, target_pos: Position) -> DIRECTIONS:
@@ -245,14 +260,17 @@ def attempt_direction_to(game_state: Game, unit: Unit, target_pos: Position) -> 
 
     for direction in check_dirs:
         newpos = unit.pos.translate(direction, 1)
-        dist = target_pos.distance_to(newpos)
 
         if tuple(newpos) in game_state.occupied_xy_set:
             continue
 
-        # [TODO] do not go into a city tile if you are carry substantial wood in the early game
-        if tuple(newpos) in game_state.player_city_tile_xy_set and unit.cargo.wood >= min(11, game_state.turns_to_dawn)*4:
+        # [TODO] do not go into a city tile if you are carry substantial max wood
+        if tuple(newpos) in game_state.player_city_tile_xy_set and unit.cargo.wood == 100:
             continue
+
+        # dist = calculate_path_distance(game_state, newpos, target_pos)
+        dist = calculate_path_distance(
+            game_state, newpos, target_pos, game_state.player_city_tile_xy_set)
 
         if dist < closest_dist:
             closest_dir = direction
