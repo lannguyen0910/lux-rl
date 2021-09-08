@@ -71,11 +71,6 @@ def make_city_actions(game_state: Game, DEBUG=False) -> List[str]:
     if not city_tiles:
         return []
 
-    city_tiles = sorted(city_tiles,
-                        key=lambda city_tile: find_best_cluster(
-                            game_state, city_tile.pos)[1],
-                        reverse=True)
-
     for city_tile in city_tiles:
         if not city_tile.can_act():
             continue
@@ -118,10 +113,14 @@ def make_unit_missions(game_state: Game, missions: Missions, DEBUG=False) -> Mis
 
     player = game_state.player
     missions.cleanup(player)  # remove dead units
+    convolved_player_unit_matrix = game_state.convolve(
+        np.array(game_state.player_units_matrix))
 
     for unit in player.units:
-        # if not unit.can_act():
-        #     continue
+        # mission is planned regardless whether the unit can act
+
+        # avoid sharing the same target
+        game_state.repopulate_targets(missions.get_targets())
 
         # if the unit is full and it is going to be day the next few days
         # go to an empty tile and build a citytile
@@ -140,9 +139,15 @@ def make_unit_missions(game_state: Game, missions: Missions, DEBUG=False) -> Mis
             # take action and not make missions if already at position
             continue
 
+        if unit.id in missions:
+            # the mission will be recaluated if the unit fails to make a move
+            continue
+
+        is_unit_alone = convolved_player_unit_matrix[unit.pos.y][unit.pos.x] > 1
+
         # once a unit is built or has build a house (detected as having max space)
         # go to the best cluster biased towards being far
-        if unit.get_cargo_space_left() == 100:
+        if is_unit_alone and (unit.get_cargo_space_left() == 100 or unit.cargo.wood >= 60):
             best_position, best_cell_value = find_best_cluster(
                 game_state, unit.pos, 1.0)
             # [TODO] what if best_cell_value is zero
@@ -151,18 +156,15 @@ def make_unit_missions(game_state: Game, missions: Missions, DEBUG=False) -> Mis
             missions.add(mission)
             continue
 
-        # if a unit is not receiving any resources
         # move to a place with resources biased towards being near
-        if game_state.convolved_fuel_matrix[unit.pos.y][unit.pos.x] <= 40:
+        if True:
             best_position, best_cell_value = find_best_cluster(
-                game_state, unit.pos, -0.1)
+                game_state, unit.pos, -0.5)
             # [TODO] what if best_cell_value is zero
             print("plan mission relocate for resources", unit.id, best_position)
             mission = Mission(unit.id, best_position, None)
             missions.add(mission)
             continue
-
-        # otherwise just camp and farm resources
 
         # [TODO] when you can secure a city all the way to the end of time, do it
 
@@ -182,16 +184,19 @@ def make_unit_actions(game_state: Game, missions: Missions, DEBUG=False) -> Tupl
     player, opponent = game_state.player, game_state.opponent
     actions = []
 
+    units_with_mission_but_no_action = set(missions.keys())
     prev_actions_len = -1
     while prev_actions_len < len(actions):
         prev_actions_len = len(actions)
 
         for unit in player.units:
             if not unit.can_act():
+                units_with_mission_but_no_action.discard(unit.id)
                 continue
 
             # if there is no mission, continue
             if unit.id not in missions:
+                units_with_mission_but_no_action.discard(unit.id)
                 continue
 
             mission: Mission = missions[unit.id]
@@ -200,6 +205,7 @@ def make_unit_actions(game_state: Game, missions: Missions, DEBUG=False) -> Tupl
 
             # if the location is reached, take action
             if unit.pos == mission.target_position:
+                units_with_mission_but_no_action.discard(unit.id)
                 print("location reached and make action", unit.id, unit.pos)
                 action = mission.target_action
                 if action:
@@ -211,12 +217,19 @@ def make_unit_actions(game_state: Game, missions: Missions, DEBUG=False) -> Tupl
             direction = attempt_direction_to(
                 game_state, unit, mission.target_position)
             if direction != "c":
+                units_with_mission_but_no_action.discard(unit.id)
                 action = unit.move(direction)
                 print("make move", unit.id, unit.pos, direction)
                 actions.append(action)
                 continue
 
             # [TODO] make it possible for units to swap positions
+
+    for unit_id in units_with_mission_but_no_action:
+        mission: Mission = missions[unit_id]
+        mission.delays += 1
+        if mission.delays >= 1:
+            del missions[unit_id]
 
     return missions, actions
 
@@ -265,7 +278,7 @@ def attempt_direction_to(game_state: Game, unit: Unit, target_pos: Position) -> 
             continue
 
         # [TODO] do not go into a city tile if you are carry substantial max wood
-        if tuple(newpos) in game_state.player_city_tile_xy_set and unit.cargo.wood == 100:
+        if tuple(newpos) in game_state.player_city_tile_xy_set and unit.cargo.wood >= 60:
             continue
 
         # dist = calculate_path_distance(game_state, newpos, target_pos)
