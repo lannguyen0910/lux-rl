@@ -72,33 +72,35 @@ def make_city_actions(game_state: Game, DEBUG=False) -> List[str]:
     if not city_tiles:
         return []
 
-    for city_tile in city_tiles:
+    for city_tile in city_tiles[::-1]:
         if not city_tile.can_act():
             continue
 
         unit_limit_exceeded = (units_cnt >= units_cap)  # recompute every time
 
         if player.researched_uranium() and unit_limit_exceeded:
+            print("skip city", city_tile.cityid,
+                  city_tile.pos.x, city_tile.pos.y)
             continue
 
-        if not player.researched_uranium() and game_state.turns_to_night < 6:
+        if not player.researched_uranium() and game_state.turns_to_night < 3:
             print("research and dont build units at night",
                   city_tile.pos.x, city_tile.pos.y)
             do_research(city_tile)
             continue
 
-        unit = Unit(game_state.player_id, 0, "tmp",
-                    city_tile.pos.x, city_tile.pos.y, 1, 0, 0, 0)
-        game_state.repopulate_targets(Missions())
-        best_position, best_cell_value = find_best_cluster(game_state, unit)
-        if not unit_limit_exceeded and best_cell_value > 0:
-            print("build_worker", city_tile.cityid,
-                  city_tile.pos.x, city_tile.pos.y, best_cell_value)
+        nearest_resource_distance = game_state.distance_from_resource[
+            city_tile.pos.y, city_tile.pos.x]
+        travel_range = game_state.turns_to_night // GAME_CONSTANTS["PARAMETERS"]["UNIT_ACTION_COOLDOWN"]["WORKER"]
+        resource_in_travel_range = nearest_resource_distance < travel_range
+
+        if resource_in_travel_range and not unit_limit_exceeded:
+            print("build_worker", city_tile.cityid, city_tile.pos.x,
+                  city_tile.pos.y, nearest_resource_distance, travel_range)
             build_workers(city_tile)
             continue
 
         if not player.researched_uranium():
-            # [TODO] dont bother researching uranium for maps with little uranium
             print("research", city_tile.pos.x, city_tile.pos.y)
             do_research(city_tile)
             continue
@@ -115,72 +117,57 @@ def make_unit_missions(game_state: Game, missions: Missions, DEBUG=False) -> Mis
         print = lambda *args: None
 
     player = game_state.player
-    convolved_player_unit_matrix = game_state.convolve(
-        game_state.player_units_matrix)
     missions.cleanup(player)  # remove dead units
 
-    for unit in player.units:
+    unit_ids_with_missions_assigned_this_turn = set()
+
+    for distance_threshold in [1, 2, 3, 4, 10, 22, 30, 100]:
+      for unit in player.units:
         # mission is planned regardless whether the unit can act
+
+        if unit.id in unit_ids_with_missions_assigned_this_turn:
+            continue
 
         # avoid sharing the same target
         game_state.repopulate_targets(missions)
 
+        # if the unit is waiting for dawn at the side of resource
+        stay_up_till_dawn = (unit.get_cargo_space_left() <= 4 and (
+            not game_state.is_day_time or game_state.turn % 40 == 0))
         # if the unit is full and it is going to be day the next few days
         # go to an empty tile and build a citytile
         # print(unit.id, unit.get_cargo_space_left())
-        if unit.get_cargo_space_left() == 0:
+        if unit.get_cargo_space_left() == 0 or stay_up_till_dawn:
             nearest_position, nearest_distance = game_state.get_nearest_empty_tile_and_distance(
                 unit.pos)
-            if nearest_distance * 2 < game_state.turns_to_night - 2:
+            if stay_up_till_dawn or nearest_distance * 2 <= game_state.turns_to_night - 2:
                 print("plan mission to build citytile",
-                      unit.id, nearest_position)
+                      unit.id, unit.pos, "->", nearest_position)
                 mission = Mission(unit.id, nearest_position, unit.build_city())
                 missions.add(mission)
+                unit_ids_with_missions_assigned_this_turn.add(unit.id)
                 continue
 
-        if unit.id in missions and missions[unit.id].target_position == unit.pos:
-            # take action and not make missions if already at position
-            continue
+        if unit.id in missions:
+            mission: Mission = missions[unit.id]
+            if mission.target_position == unit.pos:
+                # take action and not make missions if already at position
+                continue
 
         if unit.id in missions:
             # the mission will be recaluated if the unit fails to make a move
             continue
 
-        if True:
-            best_position, best_cell_value = find_best_cluster(
-                game_state, unit, -0.5)
-            # [TODO] what if best_cell_value is zero
-            print("plan mission adaptative", unit.id,
-                  unit.pos, "->", best_position)
-            mission = Mission(unit.id, best_position, None)
-            missions.add(mission)
+        best_position, best_cell_value = find_best_cluster(
+            game_state, unit, -0.5, DEBUG=DEBUG)
+        # [TODO] what if best_cell_value is zero
+        if unit.pos - best_position > distance_threshold:
             continue
-
-        is_unit_alone = convolved_player_unit_matrix[unit.pos.y,
-                                                     unit.pos.x] > 1
-
-        # once a unit is built or has build a house (detected as having max space)
-        # go to the best cluster biased towards being far
-        if is_unit_alone and (unit.get_cargo_space_left() == 100 or unit.cargo.wood >= 60):
-            best_position, best_cell_value = find_best_cluster(
-                game_state, unit, 1.0)
-            # [TODO] what if best_cell_value is zero
-            print("plan mission for far exploration",
-                  unit.id, unit.pos, "->", best_position)
-            mission = Mission(unit.id, best_position)
-            missions.add(mission)
-            continue
-
-        # move to a place with resources biased towards being near
-        if True:
-            best_position, best_cell_value = find_best_cluster(
-                game_state, unit, -0.5)
-            # [TODO] what if best_cell_value is zero
-            print("plan mission for near exploration",
-                  unit.id, unit.pos, "->", best_position)
-            mission = Mission(unit.id, best_position, None)
-            missions.add(mission)
-            continue
+        print("plan mission adaptative", unit.id,
+              unit.pos, "->", best_position)
+        mission = Mission(unit.id, best_position, None)
+        missions.add(mission)
+        unit_ids_with_missions_assigned_this_turn.add(unit.id)
 
         # [TODO] when you can secure a city all the way to the end of time, do it
 
