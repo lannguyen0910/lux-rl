@@ -86,3 +86,25 @@ def annotate_movements(game_state: Game, actions_by_units: List[str]):
         annotations.append(annotation)
 
     return annotations
+
+
+def game_logic(game_state: Game, missions: Missions, DEBUG=False):
+    if DEBUG:
+        print = __builtin__.print
+    else:
+        print = lambda *args: None
+
+    actions_by_cities = make_city_actions(game_state, DEBUG=DEBUG)
+    missions = make_unit_missions(game_state, missions, DEBUG=DEBUG)
+    mission_annotations = print_and_annotate_missions(game_state, missions)
+    missions, actions_by_units = make_unit_actions(
+        game_state, missions, DEBUG=DEBUG)
+    movement_annotations = annotate_movements(game_state, actions_by_units)
+
+    print("actions_by_cities", actions_by_cities)
+    print("actions_by_units", actions_by_units)
+    print("mission_annotations", mission_annotations)
+    print("movement_annotations", movement_annotations)
+    actions = actions_by_cities + actions_by_units + \
+        mission_annotations + movement_annotations
+    return actions, game_state, missions
