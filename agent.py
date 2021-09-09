@@ -62,3 +62,27 @@ def print_and_annotate_missions(game_state: Game, missions: Missions, DEBUG=Fals
     annotations.append(annotation)
 
     return annotations
+
+
+def annotate_movements(game_state: Game, actions_by_units: List[str]):
+    annotations = []
+    dirs = [
+        DIRECTIONS.NORTH,
+        DIRECTIONS.EAST,
+        DIRECTIONS.SOUTH,
+        DIRECTIONS.WEST,
+        DIRECTIONS.CENTER
+    ]
+    d5 = [(0, -1), (1, 0), (0, 1), (-1, 0), (0, 0)]
+
+    for action_by_units in actions_by_units:
+        if action_by_units[:2] != "m ":
+            continue
+        unit_id, dir = action_by_units.split(" ")[1:]
+        unit = game_state.player.units_by_id[unit_id]
+        x, y = unit.pos.x, unit.pos.y
+        dx, dy = d5[dirs.index(dir)]
+        annotation = annotate.line(x, y, x+dx, y+dy)
+        annotations.append(annotation)
+
+    return annotations
