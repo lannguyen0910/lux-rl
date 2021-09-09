@@ -69,6 +69,7 @@ def make_city_actions(game_state: Game, DEBUG=False) -> List[str]:
     for city in player.cities.values():
         for city_tile in city.citytiles:
             city_tiles.append(city_tile)
+
     if not city_tiles:
         return []
 
@@ -123,58 +124,62 @@ def make_unit_missions(game_state: Game, missions: Missions, DEBUG=False) -> Mis
     unit_ids_with_missions_assigned_this_turn = set()
 
     for distance_threshold in [0, 1, 2, 3, 4, 10, 22, 30, 100, 1000, 10**9+7]:
-      for unit in player.units:
-        # mission is planned regardless whether the unit can act
+        for unit in player.units:
+            # mission is planned regardless whether the unit can act
 
-        if unit.id in unit_ids_with_missions_assigned_this_turn:
-            continue
+            if unit.id in unit_ids_with_missions_assigned_this_turn:
+                continue
 
-        # avoid sharing the same target
-        game_state.repopulate_targets(missions)
+            # avoid sharing the same target
+            game_state.repopulate_targets(missions)
 
-        # if the unit is waiting for dawn at the side of resource
-        stay_up_till_dawn = (unit.get_cargo_space_left() <= 4 and (
-            not game_state.is_day_time or game_state.turn % 40 == 0))
-        # if the unit is full and it is going to be day the next few days
-        # go to an empty tile and build a citytile
-        # print(unit.id, unit.get_cargo_space_left())
-        if unit.get_cargo_space_left() == 0 or stay_up_till_dawn:
-            nearest_position, nearest_distance = game_state.get_nearest_empty_tile_and_distance(
-                unit.pos)
-            if stay_up_till_dawn or nearest_distance * 2 <= game_state.turns_to_night - 2:
-                if unit.pos - nearest_position > distance_threshold:
+            # if the unit is waiting for dawn at the side of resource
+            stay_up_till_dawn = (unit.get_cargo_space_left() <= 4 and (
+                not game_state.is_day_time or game_state.turn % 40 == 0))
+            # if the unit is full and it is going to be day the next few days
+            # go to an empty tile and build a citytile
+            # print(unit.id, unit.get_cargo_space_left())
+            if unit.get_cargo_space_left() == 0 or stay_up_till_dawn:
+                nearest_position, nearest_distance = game_state.get_nearest_empty_tile_and_distance(
+                    unit.pos)
+                if stay_up_till_dawn or nearest_distance * 2 <= game_state.turns_to_night - 2:
+                    if unit.pos - nearest_position > distance_threshold:
+                        continue
+
+                    print("plan mission to build citytile",
+                          unit.id, unit.pos, "->", nearest_position)
+                    mission = Mission(
+                        unit.id, nearest_position, unit.build_city())
+                    missions.add(mission)
+                    unit_ids_with_missions_assigned_this_turn.add(unit.id)
                     continue
-                print("plan mission to build citytile",
-                      unit.id, unit.pos, "->", nearest_position)
-                mission = Mission(unit.id, nearest_position, unit.build_city())
-                missions.add(mission)
-                unit_ids_with_missions_assigned_this_turn.add(unit.id)
+
+            if unit.id in missions:
+                mission: Mission = missions[unit.id]
+                if mission.target_position == unit.pos:
+                    # take action and not make missions if already at position
+                    continue
+
+            if unit.id in missions:
+                # the mission will be recaluated if the unit fails to make a move
                 continue
 
-        if unit.id in missions:
-            mission: Mission = missions[unit.id]
-            if mission.target_position == unit.pos:
-                # take action and not make missions if already at position
+            best_position, best_cell_value = find_best_cluster(
+                game_state, unit, DEBUG=DEBUG)
+
+            # [TODO] what if best_cell_value is zero
+            if unit.pos - best_position > distance_threshold:
                 continue
 
-        if unit.id in missions:
-            # the mission will be recaluated if the unit fails to make a move
-            continue
+            print("plan mission adaptative", unit.id,
+                  unit.pos, "->", best_position)
+            mission = Mission(unit.id, best_position, None)
+            missions.add(mission)
+            unit_ids_with_missions_assigned_this_turn.add(unit.id)
 
-        best_position, best_cell_value = find_best_cluster(
-            game_state, unit, DEBUG=DEBUG)
-        # [TODO] what if best_cell_value is zero
-        if unit.pos - best_position > distance_threshold:
-            continue
-        print("plan mission adaptative", unit.id,
-              unit.pos, "->", best_position)
-        mission = Mission(unit.id, best_position, None)
-        missions.add(mission)
-        unit_ids_with_missions_assigned_this_turn.add(unit.id)
+            # [TODO] when you can secure a city all the way to the end of time, do it
 
-        # [TODO] when you can secure a city all the way to the end of time, do it
-
-        # [TODO] just let units die perhaps
+            # [TODO] just let units die perhaps
 
     return missions
 
@@ -191,43 +196,49 @@ def make_unit_actions(game_state: Game, missions: Missions, DEBUG=False) -> Tupl
     units_with_mission_but_no_action = set(missions.keys())
     prev_actions_len = -1
     while prev_actions_len < len(actions):
-      prev_actions_len = len(actions)
+        prev_actions_len = len(actions)
 
-      for unit in player.units:
-        if not unit.can_act():
-            units_with_mission_but_no_action.discard(unit.id)
-            continue
+        for unit in player.units:
+            if not unit.can_act():
+                units_with_mission_but_no_action.discard(unit.id)
+                continue
 
-        # if there is no mission, continue
-        if unit.id not in missions:
-            units_with_mission_but_no_action.discard(unit.id)
-            continue
+            # if there is no mission, continue
+            if unit.id not in missions:
+                units_with_mission_but_no_action.discard(unit.id)
+                continue
 
-        mission: Mission = missions[unit.id]
+            mission: Mission = missions[unit.id]
 
-        print("attempting action for", unit.id, unit.pos)
+            print("attempting action for", unit.id, unit.pos)
 
-        # if the location is reached, take action
-        if unit.pos == mission.target_position:
-            units_with_mission_but_no_action.discard(unit.id)
-            print("location reached and make action", unit.id, unit.pos)
-            action = mission.target_action
-            if action:
+            # if the location is reached, take action
+            if unit.pos == mission.target_position:
+                units_with_mission_but_no_action.discard(unit.id)
+                print("location reached and make action", unit.id, unit.pos)
+                action = mission.target_action
+
+                # do not build city at last light
+                if action and action[:5] == "bcity" and game_state.turn % 40 == 30:
+                    del missions[unit.id]
+                    continue
+
+                if action:
+                    actions.append(action)
+                del missions[unit.id]
+                continue
+
+            # the unit will need to move
+            direction = attempt_direction_to(
+                game_state, unit, mission.target_position)
+            if direction != "c":
+                units_with_mission_but_no_action.discard(unit.id)
+                action = unit.move(direction)
+                print("make move", unit.id, unit.pos, direction)
                 actions.append(action)
-            del missions[unit.id]
-            continue
+                continue
 
-        # the unit will need to move
-        direction = attempt_direction_to(
-            game_state, unit, mission.target_position)
-        if direction != "c":
-            units_with_mission_but_no_action.discard(unit.id)
-            action = unit.move(direction)
-            print("make move", unit.id, unit.pos, direction)
-            actions.append(action)
-            continue
-
-        # [TODO] make it possible for units to swap positions
+            # [TODO] make it possible for units to swap positions
 
     for unit_id in units_with_mission_but_no_action:
         mission: Mission = missions[unit_id]
