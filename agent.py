@@ -108,3 +108,35 @@ def game_logic(game_state: Game, missions: Missions, DEBUG=False):
     actions = actions_by_cities + actions_by_units + \
         mission_annotations + movement_annotations
     return actions, game_state, missions
+
+
+def agent(observation, configuration, DEBUG=False):
+    if DEBUG:
+        print = __builtin__.print
+    else:
+        print = lambda *args: None
+
+    del configuration  # unused
+    global game_state, missions
+
+    if observation["step"] == 0:
+        game_state = Game()
+        game_state._initialize(observation["updates"])
+        game_state.player_id = observation.player
+        game_state._update(observation["updates"][2:])
+    else:
+        # actually rebuilt and recomputed from scratch
+        game_state._update(observation["updates"])
+
+    # on Kaggle compete, do not save items
+    if not os.environ.get('GFOOTBALL_DATA_DIR', ''):
+        str_step = str(observation["step"]).zfill(3)
+        with open('snapshots/observation-{}.pkl'.format(str_step), 'wb') as handle:
+            pickle.dump(observation, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        with open('snapshots/game_state-{}.pkl'.format(str_step), 'wb') as handle:
+            pickle.dump(game_state, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        with open('snapshots/missions-{}.pkl'.format(str_step), 'wb') as handle:
+            pickle.dump(missions, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+    actions, game_state, missions = game_logic(game_state, missions)
+    return actions
