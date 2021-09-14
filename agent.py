@@ -1,13 +1,5 @@
-import math
-r"""" Game Strategy
-- Build only one city that is constantly growing
-- Build new city tiles only when we have enough fuel for them for at least 2 next night (or until the end)
-- Build no more than 1 city tile per step
-- All units go to city before night
-- Whenever having a chance, build a new worker (and never cart)
-- Have a straightforward collision avoidance approach
-"""
-
+import string
+import random
 import os
 import pickle
 
@@ -19,10 +11,46 @@ import lux.annotate as annotate
 
 from lux.actions import *
 from lux.find_cluster import *
-from typing import DefaultDict
 
 game_state = Game()
 missions = Missions()
+
+
+def game_logic(game_state: Game, missions: Missions, DEBUG=False):
+    if DEBUG:
+        print = __builtin__.print
+    else:
+        print = lambda *args: None
+
+    actions_by_cities, M1 = make_city_actions(game_state, DEBUG=DEBUG)
+    missions = make_unit_missions(game_state, missions, DEBUG=DEBUG)
+    mission_annotations = print_and_annotate_missions(game_state, missions)
+    missions, actions_by_units, M2 = make_unit_actions(
+        game_state, missions, DEBUG=DEBUG)
+    movement_annotations = annotate_movements(game_state, actions_by_units)
+
+    M = np.dstack([M2, M1])
+    print("actions_by_cities", actions_by_cities)
+    print("actions_by_units", actions_by_units)
+    print("mission_annotations", mission_annotations)
+    print("movement_annotations", movement_annotations)
+    actions = actions_by_cities + actions_by_units + \
+        mission_annotations + movement_annotations
+    return actions, game_state, missions, M
+
+
+def print_game_state(game_state: Game, DEBUG=False):
+    if DEBUG:
+        print = __builtin__.print
+    else:
+        print = lambda *args: None
+
+    print("Turn number: ", game_state.turn)
+    print("Citytile count: ", game_state.player.city_tile_count)
+    print("Unit count: ", len(game_state.player.units))
+
+    # you can also read the pickled game_state and print its attributes
+    return
 
 
 def print_and_annotate_missions(game_state: Game, missions: Missions, DEBUG=False):
@@ -55,10 +83,8 @@ def print_and_annotate_missions(game_state: Game, missions: Missions, DEBUG=Fals
                 mission.target_position.x, mission.target_position.y)
             annotations.append(annotation)
 
-    annotation = annotate.sidetext("U:{} C:{} L:{}/{}".format(len(game_state.player.units),
-                                                              len(game_state.player_city_tile_xy_set),
-                                                              len(game_state.targeted_leaders),
-                                                              game_state.xy_to_resource_group_id.get_group_count()))
+    annotation = annotate.sidetext("U:{} C:{}".format(len(game_state.player_units_xy_set),
+                                                      len(game_state.player_city_tile_xy_set)))
     annotations.append(annotation)
 
     return annotations
@@ -88,26 +114,7 @@ def annotate_movements(game_state: Game, actions_by_units: List[str]):
     return annotations
 
 
-def game_logic(game_state: Game, missions: Missions, DEBUG=False):
-    if DEBUG:
-        print = __builtin__.print
-    else:
-        print = lambda *args: None
-
-    actions_by_cities = make_city_actions(game_state, DEBUG=DEBUG)
-    missions = make_unit_missions(game_state, missions, DEBUG=DEBUG)
-    mission_annotations = print_and_annotate_missions(game_state, missions)
-    missions, actions_by_units = make_unit_actions(
-        game_state, missions, DEBUG=DEBUG)
-    movement_annotations = annotate_movements(game_state, actions_by_units)
-
-    print("actions_by_cities", actions_by_cities)
-    print("actions_by_units", actions_by_units)
-    print("mission_annotations", mission_annotations)
-    print("movement_annotations", movement_annotations)
-    actions = actions_by_cities + actions_by_units + \
-        mission_annotations + movement_annotations
-    return actions, game_state, missions
+N = 15
 
 
 def agent(observation, configuration, DEBUG=False):
@@ -122,21 +129,29 @@ def agent(observation, configuration, DEBUG=False):
     if observation["step"] == 0:
         game_state = Game()
         game_state._initialize(observation["updates"])
-        game_state.player_id = observation.player
         game_state._update(observation["updates"][2:])
+        game_state.player_id = observation.player
     else:
         # actually rebuilt and recomputed from scratch
         game_state._update(observation["updates"])
 
+    copy_game_state = game_state
+
+    actions, game_state, missions, M = game_logic(game_state, missions)
+
     # on Kaggle compete, do not save items
     if not os.environ.get('GFOOTBALL_DATA_DIR', ''):
-        str_step = str(observation["step"]).zfill(3)
+        # str_step = str(observation["step"]).zfill(3)
+        str_step = ''.join(random.choice(
+            string.ascii_uppercase + string.digits) for _ in range(N))
         with open('snapshots/observation-{}.pkl'.format(str_step), 'wb') as handle:
             pickle.dump(observation, handle, protocol=pickle.HIGHEST_PROTOCOL)
         with open('snapshots/game_state-{}.pkl'.format(str_step), 'wb') as handle:
-            pickle.dump(game_state, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            pickle.dump(copy_game_state, handle,
+                        protocol=pickle.HIGHEST_PROTOCOL)
         with open('snapshots/missions-{}.pkl'.format(str_step), 'wb') as handle:
             pickle.dump(missions, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        with open('snapshots/actions_as_Matrix-{}.pkl'.format(str_step), 'wb') as handle:
+            pickle.dump(M, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-    actions, game_state, missions = game_logic(game_state, missions)
     return actions

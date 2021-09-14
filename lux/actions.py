@@ -40,12 +40,14 @@ def pretty_print(obj, indent=1, rec=0, key=''):
 
 DIRECTIONS = Constants.DIRECTIONS
 
-
-def make_city_actions(game_state: Game, DEBUG=False) -> List[str]:
-    if DEBUG:
-        print = __builtin__.print
-    else:
-        print = lambda *args: None
+def make_city_actions(game_state: Game, DEBUG=False):
+    if DEBUG: print = __builtin__.print
+    else: print = lambda *args: None
+        
+    # two options
+    w, h = game_state.map.width, game_state.map.height
+    M = np.zeros((h, w, 2)) # research & buid_worker
+    
 
     player = game_state.player
 
@@ -56,189 +58,209 @@ def make_city_actions(game_state: Game, DEBUG=False) -> List[str]:
 
     def do_research(city_tile: CityTile):
         action = city_tile.research()
-        game_state.player.research_points += 1
         actions.append(action)
+        
+        M[city_tile.pos.y,city_tile.pos.x,0] = 1
 
     def build_workers(city_tile: CityTile):
         nonlocal units_cnt
         action = city_tile.build_worker()
         actions.append(action)
         units_cnt += 1
+        
+        M[city_tile.pos.y,city_tile.pos.x,1] = 1
 
     city_tiles: List[CityTile] = []
     for city in player.cities.values():
         for city_tile in city.citytiles:
             city_tiles.append(city_tile)
-
     if not city_tiles:
-        return []
+        return [], M
 
-    for city_tile in city_tiles[::-1]:
+    for city_tile in city_tiles:
         if not city_tile.can_act():
             continue
 
         unit_limit_exceeded = (units_cnt >= units_cap)  # recompute every time
 
         if player.researched_uranium() and unit_limit_exceeded:
-            print("skip city", city_tile.cityid,
-                  city_tile.pos.x, city_tile.pos.y)
             continue
 
-        if not player.researched_uranium() and game_state.turns_to_night < 3:
-            print("research and dont build units at night",
-                  city_tile.pos.x, city_tile.pos.y)
+        if not player.researched_uranium() and game_state.turns_to_night < 6:
+            print("research and dont build units at night", city_tile.pos.x, city_tile.pos.y)
             do_research(city_tile)
             continue
 
-        nearest_resource_distance = game_state.distance_from_resource[
-            city_tile.pos.y, city_tile.pos.x]
-        travel_range = game_state.turns_to_night // GAME_CONSTANTS["PARAMETERS"]["UNIT_ACTION_COOLDOWN"]["WORKER"]
-        resource_in_travel_range = nearest_resource_distance < travel_range
-
-        if resource_in_travel_range and not unit_limit_exceeded:
-            print("build_worker", city_tile.cityid, city_tile.pos.x,
-                  city_tile.pos.y, nearest_resource_distance, travel_range)
+        best_position, best_cell_value = find_best_cluster(game_state, city_tile.pos)
+        if not unit_limit_exceeded and best_cell_value > 0:
+            print("build_worker", city_tile.cityid, city_tile.pos.x, city_tile.pos.y, best_cell_value)
             build_workers(city_tile)
             continue
 
         if not player.researched_uranium():
+            # [TODO] dont bother researching uranium for maps with little uranium
             print("research", city_tile.pos.x, city_tile.pos.y)
             do_research(city_tile)
             continue
 
         # otherwise don't do anything
 
-    return actions
+    return actions,M
+
+
+class Mission:
+    def __init__(self, unit_id: str, target_position: Position, target_action: str = ""):
+        self.target_position: Position = target_position
+        self.target_action: str = target_action
+        self.unit_id: str = unit_id
+        self.delays: int = 0
+        # [TODO] some expiry date for each mission
+
+    def __str__(self):
+        return " ".join([str(self.target_position), self.target_action])
+
+
+class Missions(collections.defaultdict):
+    def __init__(self):
+        self: DefaultDict[str, Mission] = collections.defaultdict(Mission)
+
+    def add(self, mission: Mission):
+        self[mission.unit_id] = mission
+
+    def cleanup(self, player: Player):
+        for unit_id in list(self.keys()):
+            if unit_id not in player.units_by_id:
+                del self[unit_id]
+
+    def __str__(self):
+        return " ".join([unit_id + " " + str(x) for unit_id,x in self.items()])
+
+    def get_targets(self):
+        return [mission.target_position for mission in self.values()]
+
 
 
 def make_unit_missions(game_state: Game, missions: Missions, DEBUG=False) -> Missions:
-    if DEBUG:
-        print = __builtin__.print
-    else:
-        print = lambda *args: None
+    if DEBUG: print = __builtin__.print
+    else: print = lambda *args: None
 
     player = game_state.player
-    missions.cleanup(player, game_state.player_city_tile_xy_set,
-                     game_state.opponent_city_tile_xy_set)  # remove dead units
+    convolved_player_unit_matrix = game_state.convolve(np.array(game_state.player_units_matrix))
+    missions.cleanup(player)  # remove dead units
 
-    unit_ids_with_missions_assigned_this_turn = set()
+    
+    for unit in player.units:
+        # mission is planned regardless whether the unit can act
 
-    for distance_threshold in [0, 1, 2, 3, 4, 10, 22, 30, 100, 1000, 10**9+7]:
-        for unit in player.units:
-            # mission is planned regardless whether the unit can act
+        # avoid sharing the same target
+        game_state.repopulate_targets(missions.get_targets())
 
-            if unit.id in unit_ids_with_missions_assigned_this_turn:
+        # if the unit is full and it is going to be day the next few days
+        # go to an empty tile and build a citytile
+        # print(unit.id, unit.get_cargo_space_left())
+        if unit.get_cargo_space_left() == 0:
+            nearest_position, nearest_distance = game_state.get_nearest_empty_tile_and_distance(unit.pos)
+            if nearest_distance < game_state.turns_to_night - 5:
+                print("plan mission to build citytile", unit.id, nearest_position)
+                mission = Mission(unit.id, nearest_position, unit.build_city())
+                missions.add(mission)
                 continue
 
-            # avoid sharing the same target
-            game_state.repopulate_targets(missions)
+        if unit.id in missions and missions[unit.id].target_position == unit.pos:
+            # take action and not make missions if already at position
+            continue
 
-            # if the unit is waiting for dawn at the side of resource
-            stay_up_till_dawn = (unit.get_cargo_space_left() <= 4 and (
-                not game_state.is_day_time or game_state.turn % 40 == 0))
-            # if the unit is full and it is going to be day the next few days
-            # go to an empty tile and build a citytile
-            # print(unit.id, unit.get_cargo_space_left())
-            if unit.get_cargo_space_left() == 0 or stay_up_till_dawn:
-                nearest_position, nearest_distance = game_state.get_nearest_empty_tile_and_distance(
-                    unit.pos)
-                if stay_up_till_dawn or nearest_distance * 2 <= game_state.turns_to_night - 2:
-                    if unit.pos - nearest_position > distance_threshold:
-                        continue
+        if unit.id in missions:
+            # the mission will be recaluated if the unit fails to make a move
+            continue
 
-                    print("plan mission to build citytile",
-                          unit.id, unit.pos, "->", nearest_position)
-                    mission = Mission(
-                        unit.id, nearest_position, unit.build_city())
-                    missions.add(mission)
-                    unit_ids_with_missions_assigned_this_turn.add(unit.id)
-                    continue
+        is_unit_alone = convolved_player_unit_matrix[unit.pos.y][unit.pos.x] > 1
 
-            if unit.id in missions:
-                mission: Mission = missions[unit.id]
-                if mission.target_position == unit.pos:
-                    # take action and not make missions if already at position
-                    continue
-
-            if unit.id in missions:
-                # the mission will be recaluated if the unit fails to make a move
-                continue
-
-            best_position, best_cell_value = find_best_cluster(
-                game_state, unit, DEBUG=DEBUG)
-
+        # once a unit is built or has build a house (detected as having max space)
+        # go to the best cluster biased towards being far
+        if is_unit_alone and (unit.get_cargo_space_left() == 100 or unit.cargo.wood >= 60):
+            best_position, best_cell_value = find_best_cluster(game_state, unit.pos, 1.0)
             # [TODO] what if best_cell_value is zero
-            if unit.pos - best_position > distance_threshold:
-                continue
+            print("plan mission for fresh grad", unit.id, best_position)
+            mission = Mission(unit.id, best_position)
+            missions.add(mission)
+            continue
 
-            print("plan mission adaptative", unit.id,
-                  unit.pos, "->", best_position)
+        # move to a place with resources biased towards being near
+        if True:
+            best_position, best_cell_value = find_best_cluster(game_state, unit.pos, -0.5)
+            # [TODO] what if best_cell_value is zero
+            print("plan mission relocate for resources", unit.id, best_position)
             mission = Mission(unit.id, best_position, None)
             missions.add(mission)
-            unit_ids_with_missions_assigned_this_turn.add(unit.id)
+            continue
 
-            # [TODO] when you can secure a city all the way to the end of time, do it
+        # [TODO] when you can secure a city all the way to the end of time, do it
 
-            # [TODO] just let units die perhaps
+        # [TODO] avoid overlapping missions
+
+        # [TODO] abort mission if block for multiple turns
 
     return missions
 
 
-def make_unit_actions(game_state: Game, missions: Missions, DEBUG=False) -> Tuple[Missions, List[str]]:
-    if DEBUG:
-        print = __builtin__.print
-    else:
-        print = lambda *args: None
-
+def make_unit_actions(game_state: Game, missions: Missions, DEBUG=False):
+    if DEBUG: print = __builtin__.print
+    else: print = lambda *args: None
+    
+    # 6 options
+    w,h = game_state.map.width, game_state.map.height
+    M = np.zeros((h,w,6)) # c s n w e build_city
+    
+    
     player, opponent = game_state.player, game_state.opponent
     actions = []
 
     units_with_mission_but_no_action = set(missions.keys())
     prev_actions_len = -1
     while prev_actions_len < len(actions):
-        prev_actions_len = len(actions)
+      prev_actions_len = len(actions)
 
-        for unit in player.units:
-            if not unit.can_act():
-                units_with_mission_but_no_action.discard(unit.id)
-                continue
+      for unit in player.units:
+        if not unit.can_act():
+            units_with_mission_but_no_action.discard(unit.id)
+            continue
 
-            # if there is no mission, continue
-            if unit.id not in missions:
-                units_with_mission_but_no_action.discard(unit.id)
-                continue
+        # if there is no mission, continue
+        if unit.id not in missions:
+            units_with_mission_but_no_action.discard(unit.id)
+            continue
 
-            mission: Mission = missions[unit.id]
+        mission: Mission = missions[unit.id]
 
-            print("attempting action for", unit.id, unit.pos)
+        print("attempting action for", unit.id, unit.pos)
 
-            # if the location is reached, take action
-            if unit.pos == mission.target_position:
-                units_with_mission_but_no_action.discard(unit.id)
-                print("location reached and make action", unit.id, unit.pos)
-                action = mission.target_action
-
-                # do not build city at last light
-                if action and action[:5] == "bcity" and game_state.turn % 40 == 30:
-                    del missions[unit.id]
-                    continue
-
-                if action:
-                    actions.append(action)
-                del missions[unit.id]
-                continue
-
-            # the unit will need to move
-            direction = attempt_direction_to(
-                game_state, unit, mission.target_position)
-            if direction != "c":
-                units_with_mission_but_no_action.discard(unit.id)
-                action = unit.move(direction)
-                print("make move", unit.id, unit.pos, direction)
+        # if the location is reached, take action
+        if unit.pos == mission.target_position:
+            units_with_mission_but_no_action.discard(unit.id)
+            print("location reached and make action", unit.id, unit.pos)
+            action = mission.target_action
+            if action:
                 actions.append(action)
-                continue
+                
+                M[unit.pos.y,unit.pos.x,5] = 1
+                
+            del missions[unit.id]
+            continue
 
-            # [TODO] make it possible for units to swap positions
+        # the unit will need to move
+        direction = attempt_direction_to(game_state, unit, mission.target_position)
+        if direction != "c":
+            units_with_mission_but_no_action.discard(unit.id)
+            action = unit.move(direction)
+            print("make move", unit.id, unit.pos, direction)
+            actions.append(action)
+            
+
+            M[unit.pos.y,unit.pos.x,"csnwe".index(direction)] = 1
+            continue
+
+        # [TODO] make it possible for units to swap positions
 
     for unit_id in units_with_mission_but_no_action:
         mission: Mission = missions[unit_id]
@@ -246,7 +268,31 @@ def make_unit_actions(game_state: Game, missions: Missions, DEBUG=False) -> Tupl
         if mission.delays >= 1:
             del missions[unit_id]
 
-    return missions, actions
+    return missions, actions,M
+
+
+def calculate_path_distance(game_state: Game, start_pos: Position, target_pos: Position, ignored_set: Set):
+    if start_pos == target_pos:
+        return 0
+
+    xy_to_distance = {}
+    xy_to_distance[tuple(start_pos)] = 0
+
+    d4 = [(1,0),(0,1),(-1,0),(0,-1)]
+    stack = collections.deque([tuple(start_pos)])
+    while stack:
+        x,y = stack.popleft()
+        for dx,dy in d4:
+            xx,yy = x+dx,y+dy
+            if (xx,yy) in xy_to_distance or (xx,yy) in game_state.occupied_xy_set:# or (xx,yy) in ignored_set:
+                continue
+            xy_to_distance[xx,yy] = xy_to_distance[x,y] + 1
+            stack.append((xx,yy))
+
+            if (xx,yy) == tuple(target_pos):
+                return xy_to_distance[xx,yy]
+
+    return 1001
 
 
 def attempt_direction_to(game_state: Game, unit: Unit, target_pos: Position) -> DIRECTIONS:
@@ -257,7 +303,7 @@ def attempt_direction_to(game_state: Game, unit: Unit, target_pos: Position) -> 
         DIRECTIONS.WEST,
     ]
     random.shuffle(check_dirs)
-    closest_dist = 10**9+7
+    closest_dist = 1000
     closest_dir = DIRECTIONS.CENTER
     closest_pos = unit.pos
 
@@ -267,12 +313,12 @@ def attempt_direction_to(game_state: Game, unit: Unit, target_pos: Position) -> 
         if tuple(newpos) in game_state.occupied_xy_set:
             continue
 
-        # do not go into a city tile if you are carrying substantial wood
+        # [TODO] do not go into a city tile if you are carry substantial max wood
         if tuple(newpos) in game_state.player_city_tile_xy_set and unit.cargo.wood >= 60:
             continue
 
-        dist = game_state.retrieve_distance(
-            newpos.x, newpos.y, target_pos.x, target_pos.y)
+        # dist = calculate_path_distance(game_state, newpos, target_pos)
+        dist = calculate_path_distance(game_state, newpos, target_pos, game_state.player_city_tile_xy_set)
 
         if dist < closest_dist:
             closest_dir = direction
