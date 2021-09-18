@@ -1,14 +1,9 @@
-import string
-import random
 import os
 import pickle
-
-import numpy as np
 import builtins as __builtin__
-
-from lux.game import Game, Mission, Missions
 import lux.annotate as annotate
 
+from lux.game import Game, Mission, Missions
 from lux.actions import *
 from lux.find_cluster import *
 
@@ -22,6 +17,7 @@ def game_logic(game_state: Game, missions: Missions, DEBUG=False):
     else:
         print = lambda *args: None
 
+    game_state.calculate_features(missions)
     actions_by_cities = make_city_actions(game_state, missions, DEBUG=DEBUG)
     missions = make_unit_missions(game_state, missions, DEBUG=DEBUG)
     mission_annotations = print_and_annotate_missions(game_state, missions)
@@ -82,10 +78,12 @@ def print_and_annotate_missions(game_state: Game, missions: Missions, DEBUG=Fals
                 mission.target_position.x, mission.target_position.y)
             annotations.append(annotation)
 
-    annotation = annotate.sidetext("U:{} C:{} L:{}/{}".format(len(game_state.player.units),
-                                                              len(game_state.player_city_tile_xy_set),
-                                                              len(game_state.targeted_leaders),
-                                                              game_state.xy_to_resource_group_id.get_group_count()))
+    annotation = annotate.sidetext("U:{} C:{} L:{}/{} T:{:.3f}".format(
+        len(game_state.player.units),
+        len(game_state.player_city_tile_xy_set),
+        game_state.targeted_cluster_count,
+        game_state.xy_to_resource_group_id.get_group_count(),
+        time.time() - game_state.compute_start_time))
     annotations.append(annotation)
 
     return annotations
