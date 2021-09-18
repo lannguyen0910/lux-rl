@@ -46,6 +46,8 @@ def find_best_cluster(game_state: Game, unit: Unit, distance_multiplier=-0.5, DE
                 continue
             if (x, y) in game_state.player_city_tile_xy_set:
                 continue
+            if (x, y) in game_state.targeted_for_building_xy_set:
+                continue
 
             # if the targeted cluster is not targeted and mined
             # prefer to target the other cluster
