@@ -1,13 +1,7 @@
 import builtins as __builtin__
-import numpy as np
-import math
-import random
 
-from typing import List
-from .game import Game, Player
-from .game_map import Cell, RESOURCE_TYPES, Unit, Position
-from .constants import Constants
-from .game_constants import GAME_CONSTANTS
+from .game import Game
+from .game_map import Unit, Position
 from .annotate import *
 
 
@@ -17,23 +11,31 @@ def find_best_cluster(game_state: Game, unit: Unit, distance_multiplier=-0.1, DE
     else:
         print = lambda *args: None
 
-    # [TODO] put logic in units
     unit.compute_travel_range(
         (game_state.turns_to_night, game_state.turns_to_dawn, game_state.is_day_time),)
 
+    # for printing
     score_matrix_wrt_pos = game_state.init_zero_matrix()
 
     best_position = unit.pos
-    best_cell_value = -1
+    best_cell_value = (0, 0, 0)
 
     # only consider other cluster if the current cluster has more than one agent mining
     consider_different_cluster = False
+    # must consider other cluster if the current cluster has more agent than tiles
+    consider_different_cluster_must = False
+
     current_leader = game_state.xy_to_resource_group_id.find(tuple(unit.pos))
+    # if not in the middle of transit between clusters
     if current_leader:
         units_mining_on_current_cluster = game_state.resource_leader_to_locating_units[
             current_leader]
         if len(units_mining_on_current_cluster) > 1:
             consider_different_cluster = True
+        resource_size_of_current_cluster = game_state.xy_to_resource_group_id.get_size(
+            current_leader)
+        if len(units_mining_on_current_cluster) >= resource_size_of_current_cluster:
+            consider_different_cluster_must = True
 
     # give very slight preference to richer matrices
     matrix = game_state.convolved_rate_matrix**0.01
@@ -50,20 +52,24 @@ def find_best_cluster(game_state: Game, unit: Unit, distance_multiplier=-0.1, DE
             # if the targeted cluster is not targeted and mined
             # prefer to target the other cluster
             target_bonus = 1
+            target_leader = game_state.xy_to_resource_group_id.find((x, y))
             if consider_different_cluster:
-                target_leader = game_state.xy_to_resource_group_id.find((x, y))
-                if target_leader:
+                if target_leader and target_leader != current_leader:
                     units_targeting_or_mining_on_target_cluster = \
                         game_state.resource_leader_to_locating_units[target_leader] | \
                         game_state.resource_leader_to_targeting_units[target_leader]
-
                     if len(units_targeting_or_mining_on_target_cluster) == 0:
-                        target_bonus = 50
+                        target_bonus = 100
+                    if consider_different_cluster_must:
+                        target_bonus = 100 / \
+                            (1+len(units_targeting_or_mining_on_target_cluster))
+            elif target_leader == current_leader:
+                target_bonus = 2
 
-            # prefer empty tile because can be built afterwards
+            # prefer empty tile because you can build afterwards
             empty_tile_bonus = 1
             if game_state.distance_from_resource[y, x] == 1:
-                empty_tile_bonus = 4
+                empty_tile_bonus = 2
 
             # scoring function
             if matrix[y, x] > 0:
@@ -72,12 +78,9 @@ def find_best_cluster(game_state: Game, unit: Unit, distance_multiplier=-0.1, DE
                 distance = max(0.9, distance)  # prevent zero error
 
                 if distance <= unit.travel_range:
-                    # encourage going far away
-                    # discourage returning to explored territory
-                    # discourage going to planned locations
-                    cell_value = target_bonus * empty_tile_bonus * \
-                        matrix[y, x] * distance ** distance_multiplier
-                    score_matrix_wrt_pos[y, x] = int(cell_value)
+                    cell_value = (target_bonus, empty_tile_bonus *
+                                  matrix[y, x] * distance ** distance_multiplier, game_state.distance_from_edge[y, x])
+                    score_matrix_wrt_pos[y, x] = cell_value[0]
 
                     if cell_value > best_cell_value:
                         best_cell_value = cell_value
