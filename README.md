@@ -1,6 +1,41 @@
 # **LUX Deep Reinforcement Learning**
 Kaggle Lux AI competition
 
+## **Setup**
+
+Run `./setup.sh` to install the required components.
+
+You will need Node version 12 or above, and conda, to install the script.
+
+
+
+## **Make submission files**
+
+Run `./submission.sh` to generate the following files
+
+- The zipfile `submission.tar.gz` which can be submitted to Kaggle [directly](https://www.kaggle.com/c/lux-ai-2021/submissions).
+- The notebook submission `notebook_generated.ipynb`. You can upload this notebook into a [fork of my notebook](https://www.kaggle.com/kernels/fork-version/73552476) and submit.
+
+
+
+## **Running a Game**
+
+Run a game with `notebook_test.ipynb`
+
+
+## **Analysing Game State and Missions**
+
+Run the game logic on a specific turn with `notebook_debug.ipynb` to understand why the agent has made a certain decision.
+
+---
+
+When the run is made with notebook_test.ipynb, the game state, and missions are saved as Python pickle files. You may load the Python pickle file and run the game logic to produce the actions and updated missions.
+
+As the game logic is run, it prints the new mission planned, the actions made include the annotation.
+
+You can modify the code and see how the agent reacts different for the same game state and missions. This allows you iteratively improve the agent more quicking.
+
+## **Game Details**
 #### The objective
 
 - At the end of 360 turns (the player first without units loses)
