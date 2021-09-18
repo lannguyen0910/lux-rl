@@ -33,7 +33,12 @@ class Missions(defaultdict):
     def add(self, mission: Mission):
         self[mission.unit_id] = mission
 
-    def cleanup(self, player: Player, player_city_tile_xy_set: Set[Tuple], opponent_city_tile_xy_set: Set[Tuple]):
+    def cleanup(self, player: Player,
+                player_city_tile_xy_set: Set[Tuple],
+                opponent_city_tile_xy_set: Set[Tuple],
+                convolved_collectable_tiles_xy_set: Set[Tuple]):
+        # probably should be a standalone function instead of a method
+
         for unit_id in list(self.keys()):
             mission: Mission = self[unit_id]
 
@@ -56,6 +61,11 @@ class Missions(defaultdict):
 
             # if you are in a base, reconsider your mission
             if tuple(unit.pos) in player_city_tile_xy_set:
+                del self[unit_id]
+                continue
+
+            # if your target no longer have resource, reconsider your mission
+            if tuple(mission.target_position) not in convolved_collectable_tiles_xy_set:
                 del self[unit_id]
                 continue
 
@@ -119,6 +129,9 @@ class DisjointSet:
 
 
 class Game:
+
+    # counted from the time after the objects are saved to disk
+    compute_start_time = -1
 
     def _initialize(self, messages):
         """
@@ -196,7 +209,6 @@ class Game:
         """
         self.map = GameMap(self.map_width, self.map_height)
         self.turn += 1
-        self.compute_start_time = time.time()
         self._reset_player_states()
 
         for update in messages:
@@ -412,20 +424,21 @@ class Game:
 
             self.populate_set(matrix, set_object)
 
-        out_of_map = set()
+        self.xy_out_of_map: Set = set()
         for y in [-1, self.map_height]:
             for x in range(self.map_width):
-                out_of_map.add((x, y))
+                self.xy_out_of_map.add((x, y))
         for y in range(self.map_height):
             for x in [-1, self.map_width]:
-                out_of_map.add((x, y))
+                self.xy_out_of_map.add((x, y))
 
         # used for distance calculation
         # out of map - yes
         # occupied by enemy units or city - yes
         # occupied by self unit not in city - yes
         # occupied by self city - no (even if there are units)
-        self.occupied_xy_set = (self.player_units_xy_set | self.opponent_units_xy_set | self.opponent_city_tile_xy_set | out_of_map) \
+        self.occupied_xy_set = (self.player_units_xy_set | self.opponent_units_xy_set |
+                                self.opponent_city_tile_xy_set | self.xy_out_of_map) \
             - self.player_city_tile_xy_set
 
     def calculate_distance_matrix(self, blockade_multiplier_value=100):
@@ -518,6 +531,7 @@ class Game:
                             edge_length = blockade_multiplier_value_for_syx
                         if (xx, yy) in self.player_city_tile_xy_set:
                             edge_length = blockade_multiplier_value_for_syx
+
                         heapq.heappush(heap, (curdist + edge_length, (xx, yy)))
 
     def retrieve_distance(self, sx, sy, ex, ey):
@@ -583,7 +597,7 @@ class Game:
         pos_and_action_list = missions.get_targets_and_actions()
         self.targeted_for_building_xy_set: Set = \
             set(tuple(pos) for pos,
-                action in pos_and_action_list if action and action[:5] != "bcity") - self.player_city_tile_xy_set
+                action in pos_and_action_list if action and action[:5] == "bcity") - self.player_city_tile_xy_set
 
         self.resource_leader_to_locating_units: DefaultDict[Tuple, Set[str]] = defaultdict(
             set)
@@ -603,7 +617,7 @@ class Game:
             if leader:
                 self.resource_leader_to_targeting_units[leader].add(unit_id)
 
-    def get_nearest_empty_tile_and_distance(self, current_position: Position) -> Tuple[Position, int]:
+    def get_nearest_empty_tile_and_distance(self, current_position: Position, current_target: Position = None) -> Tuple[Position, int]:
         if self.all_resource_amount_matrix[current_position.y, current_position.x] == 0:
             if tuple(current_position) not in self.player_city_tile_xy_set:
                 return current_position, 0
@@ -615,6 +629,9 @@ class Game:
             for x in self.x_iteration_order:
                 if (x, y) not in self.buildable_tile_xy_set:
                     continue
+                if (x, y) in self.targeted_for_building_xy_set:
+                    if current_target and (x, y) != tuple(current_target):
+                        continue
                 if self.distance_from_collectable_resource[y, x] != 1:
                     continue
 

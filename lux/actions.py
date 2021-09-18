@@ -16,8 +16,10 @@ def make_city_actions(game_state: Game, missions: Missions, DEBUG=False) -> List
         print = lambda *args: None
 
     player = game_state.player
-    missions.cleanup(player, game_state.player_city_tile_xy_set,
-                     game_state.opponent_city_tile_xy_set)  # remove dead units
+    missions.cleanup(player,
+                     game_state.player_city_tile_xy_set,
+                     game_state.opponent_city_tile_xy_set,
+                     game_state.convolved_collectable_tiles_xy_set)
     game_state.repopulate_targets(missions)
 
     units_cap = sum([len(x.citytiles) for x in player.cities.values()])
@@ -97,8 +99,10 @@ def make_unit_missions(game_state: Game, missions: Missions, DEBUG=False) -> Mis
         print = lambda *args: None
 
     player = game_state.player
-    missions.cleanup(player, game_state.player_city_tile_xy_set,
-                     game_state.opponent_city_tile_xy_set)  # remove dead units
+    missions.cleanup(player,
+                     game_state.player_city_tile_xy_set,
+                     game_state.opponent_city_tile_xy_set,
+                     game_state.convolved_collectable_tiles_xy_set)
 
     unit_ids_with_missions_assigned_this_turn = set()
 
@@ -168,50 +172,52 @@ def make_unit_actions(game_state: Game, missions: Missions, DEBUG=False) -> Tupl
 
     units_with_mission_but_no_action = set(missions.keys())
     prev_actions_len = -1
+
+    # repeat attempting movements for the units until no additional movements can be added
     while prev_actions_len < len(actions):
-      prev_actions_len = len(actions)
+        prev_actions_len = len(actions)
 
-      for unit in player.units:
-        if not unit.can_act():
-            units_with_mission_but_no_action.discard(unit.id)
-            continue
+        for unit in player.units:
+            if not unit.can_act():
+                units_with_mission_but_no_action.discard(unit.id)
+                continue
 
-        # if there is no mission, continue
-        if unit.id not in missions:
-            units_with_mission_but_no_action.discard(unit.id)
-            continue
+            # if there is no mission, continue
+            if unit.id not in missions:
+                units_with_mission_but_no_action.discard(unit.id)
+                continue
 
-        mission: Mission = missions[unit.id]
+            mission: Mission = missions[unit.id]
+            print("attempting action for", unit.id,
+                  unit.pos, "->", mission.target_position)
 
-        print("attempting action for", unit.id, unit.pos)
+            # if the location is reached, take action
+            if unit.pos == mission.target_position:
+                units_with_mission_but_no_action.discard(unit.id)
+                print("location reached and make action", unit.id, unit.pos)
+                action = mission.target_action
 
-        # if the location is reached, take action
-        if unit.pos == mission.target_position:
-            units_with_mission_but_no_action.discard(unit.id)
-            print("location reached and make action", unit.id, unit.pos)
-            action = mission.target_action
+                # do not build city at last light
+                if action and action[:5] == "bcity" and game_state.turn % 40 == 30:
+                    del missions[unit.id]
+                    continue
 
-            # do not build city at last light
-            if action and action[:5] == "bcity" and game_state.turn % 40 == 30:
+                if action:
+                    actions.append(action)
                 del missions[unit.id]
                 continue
 
-            if action:
+            # attempt to move the unit
+            direction = attempt_direction_to(
+                game_state, unit, mission.target_position)
+            if direction != "c":
+                units_with_mission_but_no_action.discard(unit.id)
+                action = unit.move(direction)
+                print("make move", unit.id, unit.pos, direction)
                 actions.append(action)
-            del missions[unit.id]
-            continue
+                continue
 
-        # the unit will need to move
-        direction = attempt_direction_to(
-            game_state, unit, mission.target_position)
-        if direction != "c":
-            units_with_mission_but_no_action.discard(unit.id)
-            action = unit.move(direction)
-            print("make move", unit.id, unit.pos, direction)
-            actions.append(action)
-            continue
-
-        # [TODO] make it possible for units to swap positions
+            # [TODO] make it possible for units to swap positions
 
     # if the unit is not able to make an action, delete the mission
     for unit_id in units_with_mission_but_no_action:
@@ -234,21 +240,25 @@ def attempt_direction_to(game_state: Game, unit: Unit, target_pos: Position) -> 
 
         cost = [0, 0, 0, 0]
 
+        # do not go out of map
         if tuple(newpos) in game_state.xy_out_of_map:
             continue
 
+        # discourage if new position is occupied
         if tuple(newpos) in game_state.occupied_xy_set:
+            if tuple(newpos) not in game_state.player_city_tile_xy_set:
+                cost[0] = 2
+
+        # discourage going into a city tile if you are carrying substantial wood
+        if tuple(newpos) in game_state.player_city_tile_xy_set and unit.cargo.wood >= 60:
             cost[0] = 1
 
-        # do not go into a city tile if you are carrying substantial wood
-        if tuple(newpos) in game_state.player_city_tile_xy_set and unit.cargo.wood >= 60:
-            cost[0] = 2
-
+        # path distance as main differentiator
         path_dist = game_state.retrieve_distance(
             newpos.x, newpos.y, target_pos.x, target_pos.y)
         cost[1] = path_dist
 
-        # prefer to walk towards
+        # manhattan distance to tie break
         manhattan_dist = (newpos - target_pos)
         cost[2] = manhattan_dist
 
@@ -256,6 +266,11 @@ def attempt_direction_to(game_state: Game, unit: Unit, target_pos: Position) -> 
         aux_cost = game_state.convolved_collectable_tiles_matrix[newpos.y, newpos.x]
         cost[3] = -aux_cost
 
+        # if starting from the city, consider manhattan distance instead of path distance
+        if tuple(unit.pos) in game_state.player_city_tile_xy_set:
+            cost[1] = manhattan_dist
+
+        # update decision
         if cost < smallest_cost:
             smallest_cost = cost
             closest_dir = direction
