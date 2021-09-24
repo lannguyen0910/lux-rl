@@ -26,3 +26,4 @@ npm install -g @lux-ai/2021-challenge@latest
 conda install jupyter ipykernel nb_conda numpy scipy torch requests -y
 pip install kaggle-environments -U
 pip install gym
+pip install -U ray

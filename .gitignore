@@ -1,3 +1,5 @@
 build
 dist
 luxai2021.egg-info
+*/__pycache__
+*/*/__pycache__
