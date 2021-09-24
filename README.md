@@ -8,7 +8,6 @@ Run `./setup.sh` to install the required components.
 You will need Node version 12 or above, and conda, to install the script.
 
 
-
 ## **Make submission files**
 
 Run `./submission.sh` to generate the following files
@@ -19,7 +18,7 @@ Run `./submission.sh` to generate the following files
 
 ## **API**
 <details>
-<summary> **Game API details** </summary>
+<summary> <b>Game API details</b> </summary>
 
 ### game_state
 

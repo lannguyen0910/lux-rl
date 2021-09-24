@@ -23,5 +23,6 @@ npm install -g @lux-ai/2021-challenge@latest
 # bash Anaconda3-2020.07-Linux-x86_64.sh
 # (you will need to manually agree to the bash script here)
 
-conda install jupyter ipykernel nb_conda numpy scipy requests -y
+conda install jupyter ipykernel nb_conda numpy scipy torch requests -y
 pip install kaggle-environments -U
+pip install gym
