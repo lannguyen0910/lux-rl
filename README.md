@@ -1,5 +1,5 @@
-# **Lux AI Challenge**
-Lux AI challenge
+# **LUX AI**
+Lux AI Challenge: https://github.com/Lux-AI-Challenge/Lux-Design-2021
 
 <img src="./assets/lux.gif" style="width:100%" />
 
