@@ -27,3 +27,5 @@ conda install jupyter ipykernel nb_conda numpy scipy torch requests -y
 pip install kaggle-environments -U
 pip install gym
 pip install -U ray
+pip install scikit-learn
+pip install tqdm
