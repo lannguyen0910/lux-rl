@@ -1,9 +1,11 @@
 # **LUX AI**
 Lux AI Challenge: https://github.com/Lux-AI-Challenge/Lux-Design-2021
 
-<img src="./assets/lux.gif" style="width:100%" />
+<p align="center">
+<img src="./assets/lux.gif" style="width:50%" />
+</p>
 
-The source code consists of 3 methods: **rule-based**, **imitation-learning**, **reinforcement-learning** (processing).  
+The source code consists of 3 methods: **rule-based-learning**, **imitation-learning**, **reinforcement-learning** (processing).  
 
 ## **Setup**
 
